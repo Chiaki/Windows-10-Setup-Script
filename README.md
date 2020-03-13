@@ -13,13 +13,13 @@ Windows 10 Setup Script
 - [PS](#ps)
   
 ## Overview
-The PowerShell script is a set of tweaks for fine-tuning the OS and automating the routine tasks.
+The PowerShell script is a set of tweaks for OS fine-tuning and automating the routine tasks.
 
 ## Supported Windows versions
-|Version|Code name|   Marketing name   |Build|   Arch  |
-|:-----:|:-------:|:------------------:|:---:|:-------:|
-| 1909  |  19H2   |November 2019 Update|18363| x64 only|
-| 1903  |  19H1   |   May 2019 Update  |18362| x64 only|
+|Version|Code name|   Marketing name   |Build|  Arch  |   Editions   |
+|:-----:|:-------:|:------------------:|:---:|:------:|:------------:|
+| 1909  |  19H2   |November 2019 Update|18363|x64 only|Pro/Enterprise|
+| 1903  |  19H1   |   May 2019 Update  |18362|x64 only|Pro/Enterprise|
 
 ## Core features
 - Turn off diagnostics tracking services;
@@ -34,8 +34,10 @@ The PowerShell script is a set of tweaks for fine-tuning the OS and automating t
 - Add folder to exclude from Windows Defender Antivirus scan;
 - Turn off per-user services;
 - Add old style shortcut for "Devices and Printers" to the Start menu";
-- Import Start menu layout from pre-saved reg file;
-  - [Download](https://github.com/farag2/Windows-10-Setup-Script/tree/master/Start%20menu%20layout) pre-saved Startmenu.reg
+- Pin shortcuts to Start menu using syspin.exe
+  - [Download](https://github.com/farag2/Windows-10-Setup-Script/raw/master/Start%20menu%20layout/syspin.exe) syspin.exe 
+  - App [site](http://www.technosys.net/products/utils/pintotaskbar)
+  - Hash (SHA256): 6967E7A3C2251812DD6B3FA0265FB7B61AADC568F562A98C50C345908C6E827
   - [Screenshot](#screenshots)
 - Unpin all Start menu tiles;
 - Set location of the "Desktop", "Documents", "Downloads", "Music", "Pictures", and "Videos";
@@ -45,7 +47,7 @@ The PowerShell script is a set of tweaks for fine-tuning the OS and automating t
 ## NB
 - PowerShell and PowerShell ISE must be run with elevated privileges;
 - Set PowerShell execution policy <code>Set-ExecutionPolicy -ExecutionPolicy Bypass -Force</code> to be able to run .ps1 files.
-  - Read more about [execution policy](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies) 
+  - Read more about [execution policy](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies)
   
 ## Usage
 To run the script:
@@ -57,8 +59,8 @@ or
 - Copy the script code and paste it into [PowerShell ISE](https://docs.microsoft.com/en-us/powershell/scripting/components/ise/windows-powershell-integrated-scripting-environment--ise-).
 
 ## FAQ
-Read the code you run carefully. Some functions are presented as an example only. You must be aware of the meaning of the functions in the code. **If you're not sure what the script does, do not run it**. Strongly recommended to run the script after fresh installation.
-Some of functions can be run also on LTSB/LTSC and on older versions of Windows and PowerShell (not recommended to run on the x86 systems).
+Read the code you run carefully. Some functions are presented as an example only. You must be aware of the meaning of the functions in the code. **If you're not sure what the script does, do not run it**.
+**Strongly recommended to run the script after fresh installation**. Some of functions can be run also on LTSB/LTSC and on older versions of Windows and PowerShell (not recommended to run on the x86 systems).
 
 ## Screenshots
 - Startmenu
@@ -81,4 +83,4 @@ Some of functions can be run also on LTSB/LTSC and on older versions of Windows 
  - [Reddit](https://www.reddit.com/r/Windows10/comments/ctg8jw/powershell_script_setup_windows_10/)
 
 ## PS
-Collection of useful [scripts](https://gist.github.com/farag2)
+Collection of useful [scripts](https://github.com/farag2/Utilities)
