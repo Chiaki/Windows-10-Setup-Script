@@ -3,7 +3,7 @@
 	The PowerShell script is a set of tweaks for fine-tuning Windows 10 and automating the routine tasks.
 .DESCRIPTION
 	Supported Windows versions:
-	Windows 10 18362/18363 (1903/1909) x64. Tested on Pro/Enterprise editions.
+	Windows 10 18362/18363 (1903/1909) x64 only. Tested on Pro/Enterprise editions.
 
 	Check whether file is encoded in UTF-8 with BOM.
 	PowerShell must be run with elevated privileges;
@@ -18,8 +18,8 @@
 .EXAMPLE
 	PS C:\WINDOWS\system32> & '.\Win 10.ps1'
 .NOTES
-	Version: v4.0.25
-	Date: 13.03.2020
+	Version: v4.0.33
+	Date: 20.04.2020
 	Written by: farag
 	Thanks to all http://forum.ru-board.com members involved
 	Ask a question on
@@ -36,6 +36,7 @@
 #Requires -Version 5
 
 #region Preparation
+# Set-StrictMode -Version Latest
 Clear-Host
 
 # Get information about the current culture settings
@@ -78,28 +79,6 @@ if (-not ([IntPtr]::Size -eq 8))
 # Сlear $Error variable
 # Очистка переменной $Error
 $Error.Clear()
-# Checking the file encoding if it runs locally
-# Проверка кодировки файла, если он запускается локально
-if ($PSCommandPath)
-{
-	[System.IO.FileInfo]$script = Get-Item -Path $PSCommandPath
-	$SequenceBOM = New-Object System.Byte[] 3
-	$reader = $script.OpenRead()
-	$bytesRead = $reader.Read($SequenceBOM, 0, 3)
-	$reader.Dispose()
-	if ($bytesRead -eq 3 -and $SequenceBOM[0] -ne 239 -and $SequenceBOM[1] -ne 187 -and $SequenceBOM[2] -ne 191)
-	{
-		if ($RU)
-		{
-			Write-Warning -Message "Файл не был сохранен в кодировке `"UTF-8 с BOM`""
-		}
-		else
-		{
-			Write-Warning -Message "The file wasn't saved in `"UTF-8 with BOM`" encoding"
-		}
-		break
-	}
-}
 # Set the encoding to UTF-8 without BOM for the PowerShell session
 # Установить кодировку UTF-8 без BOM для текущей сессии PowerShell
 if ($RU)
@@ -115,7 +94,7 @@ if ($RU)
 Get-Service -Name DiagTrack | Stop-Service -Force
 Get-Service -Name DiagTrack | Set-Service -StartupType Disabled
 # Turn off per-user services
-# Отключить пользовательские службы
+# Отключить cлужбы для отдельных пользователей
 $services = @(
 	# Contact Data
 	# Служба контактных данных
@@ -139,7 +118,7 @@ New-ItemProperty -Path HKLM:\System\CurrentControlSet\Services\UserDataSvc -Name
 Get-EtwTraceSession -Name DiagLog -ErrorAction Ignore | Remove-EtwTraceSession
 # Turn off the data collectors at the next computer restart
 # Отключить сборщики данных при следующем запуске ПК
-Update-AutologgerConfig -Name DiagLog, AutoLogger-Diagtrack-Listener -Start 0
+Update-AutologgerConfig -Name DiagLog, Diagtrack-Listener -Start 0 -ErrorAction Ignore
 # Set the operating system diagnostic data level
 # Установить уровень отправляемых диагностических сведений
 if ((Get-WindowsEdition -Online).Edition -eq "Enterprise" -or (Get-WindowsEdition -Online).Edition -eq "Education")
@@ -188,8 +167,6 @@ $tasks = @(
 	# Protects user files from accidental loss by copying them to a backup location when the system is unattended
 	# Защищает файлы пользователя от случайной потери за счет их копирования в резервное расположение, когда система находится в автоматическом режиме
 	"File History (maintenance mode)"
-	# HelloFace
-	"FODCleanupTask"
 	# Measures a system's performance and capabilities
 	# Измеряет быстродействие и возможности системы
 	"WinSAT"
@@ -211,72 +188,93 @@ $tasks = @(
 	# XblGameSave Standby Task
 	"XblGameSaveTask"
 )
+# If device is not a laptop
+# Если устройство не является ноутбуком
+if ((Get-CimInstance -ClassName Win32_ComputerSystem).PCSystemType -ne 2)
+{
+	# HelloFace
+	$tasks += "FODCleanupTask"
+}
 Get-ScheduledTask -TaskName $tasks | Disable-ScheduledTask
-# Do not offer tailored experiences based on the diagnostic data setting
-# Не предлагать персонализированные возможности, основанные на выбранном параметре диагностических данных
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy -Name TailoredExperiencesWithDiagnosticDataEnabled -PropertyType DWord -Value 0 -Force
-# Do not let apps on other devices open and message apps on this device, and vice versa
-# Не разрешать приложениям на других устройствах запускать приложения и отправлять сообщения на этом устройстве и наоборот
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\CDP -Name RomeSdkChannelUserAuthzPolicy -PropertyType DWord -Value 0 -Force
-# Do not allow apps to use advertising ID
-# Не разрешать приложениям использовать идентификатор рекламы
-New-ItemProperty -Path HKLM:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo -Name Enabled -PropertyType DWord -Value 0 -Force
-# Do not use sign-in info to automatically finish setting up device after an update or restart
-# Не использовать данные для входа для автоматического завершения настройки устройства после перезапуска или обновления
-$sid = (Get-CimInstance -ClassName Win32_UserAccount | Where-Object -FilterScript {$_.Name -eq "$env:USERNAME"}).SID
+# Do not use sign-in info to automatically finish setting up device and reopen apps after an update or restart
+# Не использовать данные для входа для автоматического завершения настройки устройства и открытия приложений после перезапуска или обновления
+$SID = (Get-CimInstance -ClassName Win32_UserAccount | Where-Object -FilterScript {$_.Name -eq $env:USERNAME}).SID
 if (-not (Test-Path -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\UserARSO\$sid"))
 {
-	New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\UserARSO\$sid" -Force
+	New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\UserARSO\$SID" -Force
 }
 New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\UserARSO\$sid" -Name OptOut -PropertyType DWord -Value 1 -Force
 # Do not let websites provide locally relevant content by accessing language list
 # Не позволять веб-сайтам предоставлять местную информацию за счет доступа к списку языков
 New-ItemProperty -Path "HKCU:\Control Panel\International\User Profile" -Name HttpAcceptLanguageOptOut -PropertyType DWord -Value 1 -Force
-# Turn on tip, trick, and suggestions as you use Windows
-# Показывать советы, подсказки и рекомендации при использованию Windows
+# Do not allow apps to use advertising ID
+# Не разрешать приложениям использовать идентификатор рекламы
+if (-not (Test-Path HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo))
+{
+	New-Item -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo -Force
+}
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo -Name Enabled -PropertyType DWord -Value 0 -Force
+# Do not let apps on other devices open and message apps on this device, and vice versa
+# Не разрешать приложениям на других устройствах запускать приложения и отправлять сообщения на этом устройстве и наоборот
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\CDP -Name RomeSdkChannelUserAuthzPolicy -PropertyType DWord -Value 0 -Force
+# Do not show the Windows welcome experiences after updates and occasionally when I sign in to highlight what's new and suggested
+# Не показывать экран приветствия Windows после обновлений и иногда при входе, чтобы сообщить о новых функциях и предложениях
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SubscribedContent-310093Enabled -PropertyType DWord -Value 0 -Force
+# Get tip, trick, and suggestions as you use Windows
+# Получать советы, подсказки и рекомендации при использованию Windows
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SubscribedContent-338389Enabled -PropertyType DWord -Value 1 -Force
-# Do not show suggested content in the Settings
-# Не показывать рекомендуемое содержание в "Параметрах"
+# Do not show suggested content in the Settings app
+# Не показывать рекомендуемое содержимое в приложении "Параметры"
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SubscribedContent-338393Enabled -PropertyType DWord -Value 0 -Force
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SubscribedContent-353694Enabled -PropertyType DWord -Value 0 -Force
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SubscribedContent-353696Enabled -PropertyType DWord -Value 0 -Force
 # Turn off automatic installing suggested apps
 # Отключить автоматическую установку рекомендованных приложений
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SilentInstalledAppsEnabled -PropertyType DWord -Value 0 -Force
+# Do not suggest ways I can finish setting up my device to get the most out of Windows
+# Не предлагать способыe завершения настройки устройства для максимально эффективного использования Windows
+if (-not (Test-Path HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement))
+{
+	New-Item -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement -Force
+}
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement -Name ScoobeSystemSettingEnabled -PropertyType DWord -Value 0 -Force
+# Do not offer tailored experiences based on the diagnostic data setting
+# Не предлагать персонализированные возможности, основанные на выбранном параметре диагностических данных
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy -Name TailoredExperiencesWithDiagnosticDataEnabled -PropertyType DWord -Value 0 -Force
 #endregion Privacy & Telemetry
 
 #region UI & Personalization
 # Show "This PC" on Desktop
 # Отобразить "Этот компьютер" на рабочем столе
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel -Name "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" -PropertyType DWord -Value 0 -Force
-# Set File Explorer to open to This PC by default
-# Открывать "Этот компьютер" в Проводнике
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name LaunchTo -PropertyType DWord -Value 1 -Force
+# Do not use check boxes to select items
+# Не использовать флажки для выбора элементов
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name AutoCheckSelect -PropertyType DWord -Value 0 -Force
 # Show hidden files, folders, and drives
 # Показывать скрытые файлы, папки и диски
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name Hidden -PropertyType DWord -Value 1 -Force
-# Turn off check boxes to select items
-# Отключить флажки для выбора элементов
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name AutoCheckSelect -PropertyType DWord -Value 0 -Force
 # Show file name extensions
 # Показывать расширения для зарегистрированных типов файлов
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name HideFileExt -PropertyType DWord -Value 0 -Force
 # Show folder merge conflicts
 # Не скрывать конфликт слияния папок
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name HideMergeConflicts -PropertyType DWord -Value 0 -Force
+# Open File Explorer to: "This PC"
+# Открывать проводник для: "Этот компьютер"
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name LaunchTo -PropertyType DWord -Value 1 -Force
 # Do not show all folders in the navigation pane
 # Не отображать все папки в области навигации
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name NavPaneShowAllFolders -PropertyType DWord -Value 0 -Force
 # Do not show Cortana button on taskbar
-# Не показывать кнопку Cortana на панели задач
-IF (-not $RU)
-{
-	New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name ShowCortanaButton -PropertyType DWord -Value 0 -Force
-}
+# Не показывать кнопку Кортаны на панели задач
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name ShowCortanaButton -PropertyType DWord -Value 0 -Force
+# Do not show sync provider notification within File Explorer
+# Не показывать уведомления поставщика синхронизации в проводнике
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name ShowSyncProviderNotifications -PropertyType DWord -Value 0 -Force
 # Do not show Task View button on taskbar
 # Не показывать кнопку Просмотра задач
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name ShowTaskViewButton -PropertyType DWord -Value 0 -Force
-# Do not show People button on the taskbar
+# Do not show People on the taskbar
 # Не показывать панель "Люди" на панели задач
 if (-not (Test-Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People))
 {
@@ -286,9 +284,10 @@ New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\
 # Show seconds on taskbar clock
 # Отображать секунды в системных часах на панели задач
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name ShowSecondsInSystemClock -PropertyType DWord -Value 1 -Force
-# Turn on acrylic taskbar transparency
-# Включить прозрачную панель задач
+# Increase taskbar transparency
+# Увеличить прозрачность панели задач
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name UseOLEDTaskbarTransparency -PropertyType DWord -Value 1 -Force
+New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\Dwm -Name ForceEffectMode -PropertyType DWord -Value 1 -Force
 # Do not show when snapping a window, what can be attached next to it
 # Не показывать при прикреплении окна, что можно прикрепить рядом с ним
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name SnapAssist -PropertyType DWord -Value 0 -Force
@@ -324,9 +323,6 @@ New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer 
 # Do not show "Recent files" in Quick access
 # Не показывать недавно использовавшиеся файлы на панели быстрого доступа
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer -Name ShowRecent -PropertyType DWord -Value 0 -Force
-# Turn off the "Previous Versions" tab from properties context menu
-# Отключить вкладку "Предыдущие версии" в свойствах файлов и папок
-New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer -Name NoPreviousVersionsPage -PropertyType DWord -Value 1 -Force
 # Hide search box or search icon on taskbar
 # Скрыть поле или значок поиска на панели задач
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Search -Name SearchboxTaskbarMode -PropertyType DWord -Value 0 -Force
@@ -343,6 +339,7 @@ $Signature = @{
 	Name = "GetStr"
 	Language = "CSharp"
 	MemberDefinition = @"
+		// https://github.com/Disassembler0/Win10-Initial-Setup-Script/issues/8#issue-227159084
 		[DllImport("kernel32.dll", CharSet = CharSet.Auto)]
 		public static extern IntPtr GetModuleHandle(string lpModuleName);
 		[DllImport("user32.dll", CharSet = CharSet.Auto)]
@@ -360,6 +357,8 @@ if (-not ("WinAPI.GetStr" -as [type]))
 {
 	Add-Type @Signature -Using System.Text
 }
+# Extract the "Unpin from taskbar" string from shell32.dll
+# Извлечь строку "Открепить от панели задач" из shell32.dll
 $unpin = [WinAPI.GetStr]::GetString(5387)
 $apps = (New-Object -ComObject Shell.Application).NameSpace("shell:::{4234d49b-0245-4df3-b780-3893943456e1}").Items()
 $apps | Where-Object -FilterScript {$_.Path -like "Microsoft.MicrosoftEdge*"} | ForEach-Object -Process {$_.Verbs() | Where-Object -FilterScript {$_.Name -eq $unpin} | ForEach-Object -Process {$_.DoIt()}}
@@ -405,19 +404,13 @@ do
 		{
 			"L"
 			{
-				# Show color only on taskbar
-				# Отображать цвет элементов только на панели задач
-				New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize -Name ColorPrevalence -PropertyType DWord -Value 0 -Force
-				# Light Theme Color for Default Windows Mode
+				# Light theme color for default Windows mode
 				# Режим Windows по умолчанию светлый
 				New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize -Name SystemUsesLightTheme -PropertyType DWord -Value 1 -Force
 			}
 			"D"
 			{
-				# Turn on the display of color on Start menu, taskbar, and action center
-				# Отображать цвет элементов в меню "Пуск", на панели задач и в центре уведомлений
-				New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize -Name ColorPrevalence -PropertyType DWord -Value 1 -Force
-				# Dark Theme Color for Default Windows Mode
+				# Dark theme color for default Windows mode
 				# Режим Windows по умолчанию темный
 				New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize -Name SystemUsesLightTheme -PropertyType DWord -Value 0 -Force
 			}
@@ -518,6 +511,15 @@ do
 	}
 }
 until ($theme -eq "L" -or $theme -eq "D")
+# Show accent color on Start, taskbar, and action center
+# Отображать цвет элементов в меню "Пуск", на панели задач и в центре уведовлений
+if ((Get-ItemPropertyValue -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize -Name SystemUsesLightTheme) -ne 0)
+{
+	New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize -Name ColorPrevalence -PropertyType DWord -Value 0 -Force
+}
+# Show accent color on the title bars and window borders
+# Отображать цвет элементов в заголовках окон и границ окон
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\DWM -Name ColorPrevalence -PropertyType DWord -Value 1 -Force
 # Do not show "New App Installed" notification
 # Не показывать уведомление "Установлено новое приложение"
 if (-not (Test-Path -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer))
@@ -529,9 +531,9 @@ New-ItemProperty -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer -Name 
 # Не показывать анимацию при первом входе в систему
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System -Name EnableFirstLogonAnimation -PropertyType DWord -Value 0 -Force
 # Turn off JPEG desktop wallpaper import quality reduction
-# Отключить снижение качества фона рабочего стола в формате JPEG
+# Отключить снижение качества при импорте фонового изображение рабочего стола в формате JPEG
 New-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name JPEGImportQuality -PropertyType DWord -Value 100 -Force
-# Show Task manager details
+# Expand Task manager window
 # Раскрыть окно Диспетчера задач
 $taskmgr = Get-Process -Name Taskmgr -ErrorAction Ignore
 if ($taskmgr)
@@ -550,18 +552,12 @@ $preferences.Preferences[28] = 0
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\TaskManager -Name Preferences -PropertyType Binary -Value $preferences.Preferences -Force
 # Remove Microsoft Edge shortcut from the Desktop
 # Удалить ярлык Microsoft Edge с рабочего стола
-$value = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name Desktop
-Remove-Item -Path "$value\Microsoft Edge.lnk" -Force -ErrorAction Ignore
-# Show accent color on the title bars and window borders
-# Отображать цвет элементов в заголовках окон и границ окон
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\DWM -Name ColorPrevalence -PropertyType DWord -Value 1 -Force
-# Turn off automatically hiding scroll bars
-# Отключить автоматическое скрытие полос прокрутки в Windows
-New-ItemProperty -Path "HKCU:\Control Panel\Accessibility" -Name DynamicScrollbars -PropertyType DWord -Value 0 -Force
-# Show more Windows Update restart notifications about restarting
+$DesktopFolder = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name Desktop
+Remove-Item -Path "$DesktopFolder\Microsoft Edge.lnk" -Force -ErrorAction Ignore
+# Show a notification when your PC requires a restart to finish updating
 # Показывать уведомление, когда компьютеру требуется перезагрузка для завершения обновления
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings -Name RestartNotificationsAllowed2 -PropertyType DWord -Value 1 -Force
-# Turn off the "- Shortcut" name extension for new shortcuts
+# Do not add the "- Shortcut" for created shortcuts
 # Нe дoбaвлять "- яpлык" для coздaвaeмыx яpлыкoв
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer -Name link -PropertyType Binary -Value ([byte[]](00, 00, 00, 00)) -Force
 # Use the PrtScn button to open screen snipping
@@ -575,61 +571,148 @@ New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings -Name 
 #region OneDrive
 # Uninstall OneDrive
 # Удалить OneDrive
-Stop-Process -Name OneDrive -Force -ErrorAction Ignore
-Start-Process -FilePath "$env:SystemRoot\SysWOW64\OneDriveSetup.exe" -ArgumentList "/uninstall" -Wait
-Stop-Process -Name explorer -Force
-Remove-ItemProperty -Path HKCU:\Environment -Name OneDrive -Force -ErrorAction Ignore
-Remove-Item -Path "$env:ProgramData\Microsoft OneDrive" -Recurse -Force -ErrorAction Ignore
-Unregister-ScheduledTask -TaskName *OneDrive* -Confirm:$false
-if ((Get-ChildItem -Path $env:USERPROFILE\OneDrive -ErrorAction Ignore | Measure-Object).Count -eq 0)
-{
-	Remove-Item -Path $env:USERPROFILE\OneDrive -Recurse -Force -ErrorAction Ignore
-}
-else
+[string] $UninstallString = Get-Package -Name "Microsoft OneDrive" -ErrorAction Ignore | ForEach-Object -Process {$_.Meta.Attributes["UninstallString"]}
+if ($UninstallString)
 {
 	if ($RU)
 	{
-		Write-Error -Message "Папка $env:USERPROFILE\OneDrive не пуста. Удалите ее вручную" -ErrorAction SilentlyContinue
+		Write-Verbose -Message "Удаление OneDrive" -Verbose
 	}
 	else
 	{
-		Write-Error -Message "$env:USERPROFILE\OneDrive folder is not empty. Delete it manually" -ErrorAction SilentlyContinue
+		Write-Verbose -Message "Uninstalling OneDrive" -Verbose
 	}
+	Stop-Process -Name OneDrive -Force
+	Stop-Process -Name FileCoAuth -ErrorAction Ignore -Force
+	# Save all opened folders in order to restore them after File Explorer restarting
+	# Сохранить все открытые папки, чтобы восстановить их после перезапуска проводника
+	Clear-Variable -Name OpenedFolders -Force -ErrorAction Ignore
+	$OpenedFolders = {(New-Object -ComObject Shell.Application).Windows() | ForEach-Object -Process {$_.Document.Folder.Self.Path}}.Invoke()
+	# Getting link to the OneDriveSetup.exe and its' argument(s)
+	# Получаем ссылку на OneDriveSetup.exe и его аргумент(ы)
+	[string[]] $OneDriveSetup = ($UninstallString -Replace("\s*/",",/")).Trim().Split(",")
+	if ($OneDriveSetup.Count -eq 2)
+	{
+		Start-Process -FilePath $OneDriveSetup[0] -ArgumentList $OneDriveSetup[1..1] -Wait
+	}
+	else
+	{
+		Start-Process -FilePath $OneDriveSetup[0] -ArgumentList $OneDriveSetup[1..2] -Wait
+	}
+	Stop-Process -Name explorer -Force
+	# Restoring closed folders
+	# Восстановляем закрытые папки
+	foreach ($OpenedFolder in $OpenedFolders)
+	{
+		if (Test-Path -Path $OpenedFolder)
+		{
+			Invoke-Item -Path $OpenedFolder
+		}
+	}
+	# Getting the OneDrive user folder path
+	# Получаем путь до папки пользователя OneDrive
+	$OneDriveUserFolder = Get-ItemPropertyValue -Path HKCU:\Environment -Name OneDrive
+	if ((Get-ChildItem -Path $OneDriveUserFolder | Measure-Object).Count -eq 0)
+	{
+		Remove-Item -Path $OneDriveUserFolder -Recurse -Force
+	}
+	else
+	{
+		if ($RU)
+		{
+			Write-Error -Message "Папка $OneDriveUserFolder не пуста. Удалите ее вручную" -ErrorAction SilentlyContinue
+		}
+		else
+		{
+			Write-Error -Message "The $OneDriveUserFolder folder is not empty. Delete it manually" -ErrorAction SilentlyContinue
+		}
+		Invoke-Item -Path $OneDriveUserFolder
+	}
+	Remove-ItemProperty -Path HKCU:\Environment -Name OneDrive, OneDriveConsumer -Force -ErrorAction Ignore
+	Remove-Item -Path HKCU:\Software\Microsoft\OneDrive -Recurse -Force -ErrorAction Ignore
+	Remove-Item -Path HKLM:\SOFTWARE\WOW6432Node\Microsoft\OneDrive -Recurse -Force -ErrorAction Ignore
+	Remove-Item -Path "$env:ProgramData\Microsoft OneDrive" -Recurse -Force -ErrorAction Ignore
+	Remove-Item -Path $env:SystemDrive\OneDriveTemp -Recurse -Force -ErrorAction Ignore
+	Unregister-ScheduledTask -TaskName *OneDrive* -Confirm:$false
+	# Getting the OneDrive folder path
+	# Получаем путь до папки OneDrive
+	$OneDriveFolder = Split-Path -Path (Split-Path -Path $OneDriveSetup[0] -Parent)
+	# Waiting for the FileSyncShell64.dll to be unloaded, using System.IO.File class
+	# Ожидаем, пока FileSyncShell64.dll выгрузится, используя класс System.IO.File
+	$FileSyncShell64dllFolder = Get-ChildItem -Path "$OneDriveFolder\*\amd64\FileSyncShell64.dll" -Force
+	foreach ($FileSyncShell64dll in $FileSyncShell64dllFolder)
+	{
+		do
+		{
+			try
+			{
+				$FileStream = [System.IO.File]::Open($FileSyncShell64dll.FullName,"Open","Write")
+				$FileStream.Close()
+				$FileStream.Dispose()
+				$Locked = $false
+			}
+			catch [System.UnauthorizedAccessException]
+			{
+				$Locked = $true
+			}
+			catch [Exception]
+			{
+				Start-Sleep -Milliseconds 500
+				if ($RU)
+				{
+					Write-Verbose -Message "Ожидаем, пока $FileSyncShell64dll будет разблокирована" -Verbose
+				}
+				else
+				{
+					Write-Verbose -Message "Waiting for the $FileSyncShell64dll to be unlocked" -Verbose
+				}
+			}
+		}
+		while ($Locked)
+	}
+	Remove-Item -Path $OneDriveFolder -Recurse -Force
+	Remove-Item -Path $env:LOCALAPPDATA\OneDrive -Recurse -Force -ErrorAction Ignore
+	Remove-Item -Path $env:LOCALAPPDATA\Microsoft\OneDrive -Recurse -Force -ErrorAction Ignore
 }
-Wait-Process -Name OneDriveSetup -ErrorAction Ignore
-Remove-Item -Path $env:LOCALAPPDATA\Microsoft\OneDrive -Recurse -Force -ErrorAction Ignore
 #endregion OneDrive
 
 #region System
 # Turn on Storage Sense
-# Включить Память устройства
+# Включить контроль памяти
+if (-not (Test-Path -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy))
+{
+	New-Item -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -ItemType Directory -Force
+}
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 01 -PropertyType DWord -Value 1 -Force
-# Run Storage Sense every month
-# Запускать контроль памяти каждый месяц
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 2048 -PropertyType DWord -Value 30 -Force
-# Delete temporary files that apps aren't using
-# Удалять временные файлы, не используемые в приложениях
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 04 -PropertyType DWord -Value 1 -Force
-# Delete files in recycle bin if they have been there for over 30 days
-# Удалять файлы, которые находятся в корзине более 30 дней
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 256 -PropertyType DWord -Value 30 -Force
-# Never delete files in "Downloads" folder
-# Никогда не удалять файлы из папки "Загрузки"
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 512 -PropertyType DWord -Value 0 -Force
+if ((Get-ItemPropertyValue -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 01) -eq "1")
+{
+	# Run Storage Sense every month
+	# Запускать контроль памяти каждый месяц
+	New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 2048 -PropertyType DWord -Value 30 -Force
+	# Delete temporary files that apps aren't using
+	# Удалять временные файлы, не используемые в приложениях
+	New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 04 -PropertyType DWord -Value 1 -Force
+	# Delete files in recycle bin if they have been there for over 30 days
+	# Удалять файлы из корзины, если они находятся в корзине более 30 дней
+	New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 256 -PropertyType DWord -Value 30 -Force
+	# Never delete files in "Downloads" folder
+	# Никогда не удалять файлы из папки "Загрузки"
+	New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy -Name 512 -PropertyType DWord -Value 0 -Force
+}
 # Let Windows try to fix apps so they're not blurry
 # Разрешить Windows исправлять размытость в приложениях
 New-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name EnablePerProcessSystemDPI -PropertyType DWord -Value 1 -Force
-# Turn off hibernate for devices, except laptops
-# Отключить режим гибернации для устройств, кроме ноутбуков
+# Turn off hibernate if device is not a laptop
+# Отключить режим гибернации, если устройство не является ноутбуком
 if ((Get-CimInstance -ClassName Win32_ComputerSystem).PCSystemType -ne 2)
 {
-	powercfg /hibernate off
+	POWERCFG /HIBERNATE OFF
 }
 # Turn off location access for this device
 # Отключить доступ к сведениям о расположении для этого устройства
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location -Name Value -PropertyType String -Value Deny -Force
-# Change $env:TEMP environment variable path to $env:SystemDrive\Temp
-# Изменить путь переменной среды для временных файлов на $env:SystemDrive\Temp
+# Change %TEMP% environment variable path to %SystemDrive%\Temp
+# Изменить путь переменной среды для %TEMP% на %SystemDrive%\Temp
 if (-not (Test-Path -Path $env:SystemDrive\Temp))
 {
 	New-Item -Path $env:SystemDrive\Temp -ItemType Directory -Force
@@ -652,19 +735,18 @@ Remove-Item -Path $env:SystemRoot\Temp -Recurse -Force -ErrorAction Ignore
 New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem -Name LongPathsEnabled -PropertyType DWord -Value 1 -Force
 # Group svchost.exe processes
 # Группировать процессы svchost.exe
-$ram = (Get-CimInstance -ClassName Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1kb
-New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control -Name SvcHostSplitThresholdInKB -PropertyType DWord -Value $ram -Force
+$RAMCapacity = (Get-CimInstance -ClassName Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum/1kb
+New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control -Name SvcHostSplitThresholdInKB -PropertyType DWord -Value $RAMCapacity -Force
 # Display the Stop error information on the BSoD
 # Отображать Stop-ошибку при появлении BSoD
 New-ItemProperty -Path HKLM:\System\CurrentControlSet\Control\CrashControl -Name DisplayParameters -PropertyType DWord -Value 1 -Force
-# Do not preserve zone information
+# Do not preserve zone information in file attachments
 # Не хранить сведения о зоне происхождения вложенных файлов
 if (-not (Test-Path -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments))
 {
 	New-Item -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments -Force
 }
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments -Name SaveZoneInformation -PropertyType DWord -Value 1 -Force
-New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments -Name SaveZoneInformation -PropertyType DWord -Value 1 -Force
 # Turn off Admin Approval Mode for administrators
 # Отключить использование режима одобрения администратором для встроенной учетной записи администратора
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System -Name ConsentPromptBehaviorAdmin -PropertyType DWord -Value 0 -Force
@@ -687,8 +769,8 @@ New-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVers
 # Не разрешать Windows управлять принтером, используемым по умолчанию
 New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows" -Name LegacyDefaultPrinterMode -PropertyType DWord -Value 1 -Force
 # Turn off Windows features
-# Отключить компоненты
-$features = @(
+# Отключить компоненты Windows
+$WindowsOptionalFeatures = @(
 	# Windows Fax and Scan
 	# Факсы и сканирование
 	"FaxServicesClientPackage"
@@ -711,35 +793,40 @@ $features = @(
 	# Клиент рабочих папок
 	"WorkFolders-Client"
 )
-Disable-WindowsOptionalFeature -Online -FeatureName $features -NoRestart
+Disable-WindowsOptionalFeature -Online -FeatureName $WindowsOptionalFeatures -NoRestart
 # Remove Windows capabilities
-# Удалить компоненты
-$IncludedApps = @(
+# Удалить дополнительные компоненты Windows
+$Capabilities = @(
 	# Microsoft Quick Assist
 	# Быстрая поддержка (Майкрософт)
 	"App.Support.QuickAssist*"
-	# Windows Hello Face
-	# Распознавание лиц Windows Hello
-	"Hello.Face*"
 	# Windows Media Player
 	# Проигрыватель Windows Media
 	"Media.WindowsMediaPlayer*"
 )
+# If device is not a laptop
+# Если устройство не является ноутбуком
+if ((Get-CimInstance -ClassName Win32_ComputerSystem).PCSystemType -ne 2)
+{
+	# Windows Hello Face
+	# Распознавание лиц Windows Hello
+	$Capabilities += "Hello.Face*"
+}
 $OFS = "|"
-Get-WindowsCapability -Online | Where-Object -FilterScript {$_.Name -cmatch $IncludedApps} | Remove-WindowsCapability -Online
+Get-WindowsCapability -Online | Where-Object -FilterScript {$_.Name -cmatch $Capabilities} | Remove-WindowsCapability -Online
 $OFS = " "
 # Turn on updates for other Microsoft products
 # Включить автоматическое обновление для других продуктов Microsoft
 (New-Object -ComObject Microsoft.Update.ServiceManager).AddService2("7971f918-a847-4430-9279-4a52d1efe18d", 7, "")
-# Remove Shadow copies (restoration points)
-# Удалить теневые копии (точки восстановения)
+# Delete all restore points
+# Удалить все точки восстановения
 Get-CimInstance -ClassName Win32_ShadowCopy | Remove-CimInstance
 # Turn off background apps, except the followings...
 # Запретить приложениям работать в фоновом режиме, кроме следующих...
 Get-ChildItem -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications | ForEach-Object -Process {
 	Remove-ItemProperty -Path $_.PsPath -Name * -Force
 }
-$ExcludedApps = @(
+$ExcludedBackgroundApps = @(
 	# Lock App
 	"Microsoft.LockApp*"
 	# Content Delivery Manager
@@ -757,7 +844,7 @@ $ExcludedApps = @(
 	"Microsoft.WindowsStore*"
 )
 $OFS = "|"
-Get-ChildItem -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications | Where-Object -FilterScript {$_.PSChildName -cnotmatch $ExcludedApps} | ForEach-Object -Process {
+Get-ChildItem -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications | Where-Object -FilterScript {$_.PSChildName -cnotmatch $ExcludedBackgroundApps} | ForEach-Object -Process {
 	New-ItemProperty -Path $_.PsPath -Name Disabled -PropertyType DWord -Value 1 -Force
 	New-ItemProperty -Path $_.PsPath -Name DisabledByUser -PropertyType DWord -Value 1 -Force
 }
@@ -779,13 +866,13 @@ else
 	# Высокая производительность для стационарного ПК
 	powercfg /setactive SCHEME_MIN
 }
-# Turn on latest installed .NET runtime for all apps
+# Use latest installed .NET runtime for all apps
 # Использовать последнюю установленную версию .NET для всех приложений
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\.NETFramework -Name OnlyUseLatestCLR -PropertyType DWord -Value 1 -Force
 New-ItemProperty -Path HKLM:\SOFTWARE\Wow6432Node\Microsoft\.NETFramework -Name OnlyUseLatestCLR -PropertyType DWord -Value 1 -Force
-# Do not allow the computer to turn off the network adapters to save power
-# Запретить отключение сетевых адаптеров для экономии энергии
-if ((Get-CimInstance -ClassName Win32_ComputerSystem).PCSystemType -eq 1)
+# Do not allow the computer (if device is not a laptop) to turn off the network adapters to save power
+# Запретить отключение сетевых адаптеров для экономии энергии (если устройство не является ноутбуком)
+if ((Get-CimInstance -ClassName Win32_ComputerSystem).PCSystemType -ne 2)
 {
 	$adapters = Get-NetAdapter -Physical | Get-NetAdapterPowerManagement | Where-Object -FilterScript {$_.AllowComputerToTurnOffDevice -ne "Unsupported"}
 	foreach ($adapter in $adapters)
@@ -801,28 +888,39 @@ Set-WinDefaultInputMethodOverride "0409:00000409"
 # Включить Windows Sandbox
 if (Get-WindowsEdition -Online | Where-Object -FilterScript {$_.Edition -eq "Professional" -or $_.Edition -eq "Enterprise"})
 {
+	# Checking whether x86 virtualization is enabled in BIOS
+	# Проверка: включена ли в BIOS аппаратная виртуализация x86
 	if ((Get-CimInstance -ClassName CIM_Processor).VirtualizationFirmwareEnabled -eq $true)
 	{
-		Enable-WindowsOptionalFeature –FeatureName Containers-DisposableClientVM -All -Online -NoRestart
+		Enable-WindowsOptionalFeature -FeatureName Containers-DisposableClientVM -All -Online -NoRestart
 	}
 	else
 	{
 		try
 		{
-			if ((Get-CimInstance –ClassName CIM_ComputerSystem).HypervisorPresent -eq $true)
+			# Checking whether Hyper-V is enabled
+			# Проверка: включен ли Hyper-V
+			if ((Get-CimInstance -ClassName CIM_ComputerSystem).HypervisorPresent -eq $true)
 			{
-				Enable-WindowsOptionalFeature –FeatureName Containers-DisposableClientVM -All -Online -NoRestart
+				Enable-WindowsOptionalFeature -FeatureName Containers-DisposableClientVM -All -Online -NoRestart
 			}
 		}
-		catch
+		catch [Exception]
 		{
-			Write-Error "Enable Virtualization in BIOS"
+			if ($RU)
+			{
+				Write-Error -Message "Включите в BIOS виртуализацию" -ErrorAction SilentlyContinue
+			}
+			else
+			{
+				Write-Error -Message "Enable Virtualization in BIOS" -ErrorAction SilentlyContinue
+			}
 		}
 	}
 }
-# Set location of the "Desktop", "Documents", "Downloads", "Music", "Pictures", and "Videos"
-# Переопределить расположение папок "Рабочий стол", "Документы", "Загрузки", "Музыка", "Изображения", "Видео"
-Function KnownFolderPath
+# Set location of the user folders to %SystemDrive%
+# Установить расположение пользовательских папок на %SystemDrive%
+function KnownFolderPath
 {
 	Param (
 		[Parameter(Mandatory = $true)]
@@ -934,6 +1032,17 @@ do
 		$DesktopReg = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name Desktop
 		if ($DesktopReg -ne $DesktopFolder)
 		{
+			if ((Get-ChildItem -Path $DesktopReg | Measure-Object).Count -ne 0)
+			{
+				if ($RU)
+				{
+					Write-Error -Message "В папке $DesktopReg осталась информация" -ErrorAction SilentlyContinue
+				}
+				else
+				{
+					Write-Error -Message "The $DesktopReg folder is not empty" -ErrorAction SilentlyContinue
+				}
+			}
 			if (-not (Test-Path -Path $DesktopFolder))
 			{
 				New-Item -Path $DesktopFolder -ItemType Directory -Force
@@ -945,8 +1054,25 @@ do
 			(Get-Item -Path "$DesktopFolder\desktop.ini" -Force).Refresh()
 		}
 		# Save screenshots by pressing Win+PrtScr to the Desktop
-		# Сохранить скриншот по Win+PrtScr на рабочем столе
-		New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderDescriptions\{b7bede81-df94-4682-a7d8-57a52620b86f}" -Name RelativePath -PropertyType String -Value $DesktopFolder -Force
+		# Сохранять скриншоты по нажатию Win+PrtScr на рабочем столе
+		$DesktopFolder = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name Desktop
+		Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "{B7BEDE81-DF94-4682-A7D8-57A52620B86F}" -Type ExpandString -Value $DesktopFolder -Force
+		# Save all opened folders in order to restore them after File Explorer restart
+		# Сохранить все открытые папки, чтобы восстановить их после перезапуска проводника
+		Clear-Variable -Name OpenedFolders -Force -ErrorAction Ignore
+		$OpenedFolders = {(New-Object -ComObject Shell.Application).Windows() | ForEach-Object -Process {$_.Document.Folder.Self.Path}}.Invoke()
+		# In order for the changes to take effect the File Explorer process has to be restarted
+		# Чтобы изменения вступили в силу, необходимо перезапустить процесс проводника
+		Stop-Process -Name explorer -Force
+		# Restore closed folders
+		# Восстановить закрытые папки
+		foreach ($OpenedFolder in $OpenedFolders)
+		{
+			if (Test-Path -Path $OpenedFolder)
+			{
+				Invoke-Item -Path $OpenedFolder
+			}
+		}
 	}
 	elseif ([string]::IsNullOrEmpty($drive))
 	{
@@ -996,6 +1122,17 @@ do
 		$DocumentsReg = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name Personal
 		if ($DocumentsReg -ne $DocumentsFolder)
 		{
+			if ((Get-ChildItem -Path $DocumentsReg | Measure-Object).Count -ne 0)
+			{
+				if ($RU)
+				{
+					Write-Error -Message "В папке $DocumentsReg осталась информация" -ErrorAction SilentlyContinue
+				}
+				else
+				{
+					Write-Error -Message "The $DocumentsReg folder is not empty" -ErrorAction SilentlyContinue
+				}
+			}
 			if (-not (Test-Path -Path $DocumentsFolder))
 			{
 				New-Item -Path $DocumentsFolder -ItemType Directory -Force
@@ -1055,6 +1192,17 @@ do
 		$DownloadsReg = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "{374DE290-123F-4565-9164-39C4925E467B}"
 		if ($DownloadsReg -ne $DownloadsFolder)
 		{
+			if ((Get-ChildItem -Path $DownloadsReg | Measure-Object).Count -ne 0)
+			{
+				if ($RU)
+				{
+					Write-Error -Message "В папке $DownloadsReg осталась информация" -ErrorAction SilentlyContinue
+				}
+				else
+				{
+					Write-Error -Message "The $DownloadsReg folder is not empty" -ErrorAction SilentlyContinue
+				}
+			}
 			if (-not (Test-Path -Path $DownloadsFolder))
 			{
 				New-Item -Path $DownloadsFolder -ItemType Directory -Force
@@ -1066,7 +1214,7 @@ do
 			(Get-Item -Path "$DownloadsFolder\desktop.ini" -Force).Refresh()
 			# Microsoft Edge downloads folder
 			# Папка загрузок Microsoft Edge
-			$edge = (Get-AppxPackage -Name "Microsoft.MicrosoftEdge").PackageFamilyName
+			$edge = (Get-AppxPackage -Name Microsoft.MicrosoftEdge).PackageFamilyName
 			New-ItemProperty -Path "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Storage\$edge\MicrosoftEdge\Main" -Name "Default Download Directory" -PropertyType String -Value $DownloadsFolder -Force
 		}
 	}
@@ -1118,6 +1266,17 @@ do
 		$MusicReg = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "My Music"
 		if ($MusicReg -ne $MusicFolder)
 		{
+			if ((Get-ChildItem -Path $MusicReg | Measure-Object).Count -ne 0)
+			{
+				if ($RU)
+				{
+					Write-Error -Message "В папке $MusicReg осталась информация" -ErrorAction SilentlyContinue
+				}
+				else
+				{
+					Write-Error -Message "The $MusicReg folder is not empty" -ErrorAction SilentlyContinue
+				}
+			}
 			if (-not (Test-Path -Path $MusicFolder))
 			{
 				New-Item -Path $MusicFolder -ItemType Directory -Force
@@ -1177,6 +1336,17 @@ do
 		$PicturesReg = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "My Pictures"
 		if ($PicturesReg -ne $PicturesFolder)
 		{
+			if ((Get-ChildItem -Path $PicturesReg | Measure-Object).Count -ne 0)
+			{
+				if ($RU)
+				{
+					Write-Error -Message "В папке $PicturesReg осталась информация" -ErrorAction SilentlyContinue
+				}
+				else
+				{
+					Write-Error -Message "The $PicturesReg folder is not empty" -ErrorAction SilentlyContinue
+				}
+			}
 			if (-not (Test-Path -Path $PicturesFolder))
 			{
 				New-Item -Path $PicturesFolder -ItemType Directory -Force
@@ -1236,6 +1406,17 @@ do
 		$VideosReg = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "My Video"
 		if ($VideosReg -ne $VideosFolder)
 		{
+			if ((Get-ChildItem -Path $VideosReg | Measure-Object).Count -ne 0)
+			{
+				if ($RU)
+				{
+					Write-Error -Message "В папке $VideosReg осталась информация" -ErrorAction SilentlyContinue
+				}
+				else
+				{
+					Write-Error -Message "The $PicturesReg folder is not empty" -ErrorAction SilentlyContinue
+				}
+			}
 			if (-not (Test-Path -Path $VideosFolder))
 			{
 				New-Item -Path $VideosFolder -ItemType Directory -Force
@@ -1278,69 +1459,96 @@ if (-not (Test-Path -Path HKLM:\SOFTWARE\Microsoft\WindowsMitigation))
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\WindowsMitigation -Name UserPreference -PropertyType DWord -Value 3 -Force
 # Set "High performance" in graphics performance preference for apps
 # Установить параметры производительности графики для отдельных приложений на "Высокая производительность"
-if ((Get-CimInstance -ClassName Win32_ComputerSystem).PCSystemType -ne 2 -and (Get-CimInstance -ClassName Win32_VideoController | Where-Object -FilterScript {$_.AdapterDACType -ne "Internal" -and $null -ne $_.AdapterDACType}))
+if (Get-CimInstance -ClassName Win32_VideoController | Where-Object -FilterScript {$_.AdapterDACType -ne "Internal" -and $null -ne $_.AdapterDACType})
 {
-	if ($RU)
-	{
-		Write-Host "`nВведите полные пути до .exe файлов, " -NoNewline
-		Write-Host "для которого следует установить"
-		Write-Host "параметры производительности графики на `"Высокая производительность`"."
-		Write-Host "Пути должны быть разделены запятыми и взяты в кавычки." -ForegroundColor Yellow
-		Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-	}
-	else
-	{
-		Write-Host "`nType the full paths to .exe files for which to set"
-		Write-Host "graphics performance preference to `"High performance GPU`"."
-		Write-Host "The paths must be separated by commas and taken in quotes." -ForegroundColor Yellow
-		Write-Host "`nPress Enter to skip" -NoNewline
-	}
-	if (Test-Path -Path "${env:ProgramFiles(x86)}\Steam")
-	{
-		Start-Process -FilePath "${env:ProgramFiles(x86)}\Steam\steamapps\common"
-	}
-	function GpuPreference
-	{
-		[CmdletBinding()]
-		Param
-		(
-			[Parameter(Mandatory = $True)]
-			[string[]]$apps
-		)
-		$apps = $apps.Replace("`"", "").Split(",").Trim()
-		foreach ($app in $apps)
-		{
-			New-ItemProperty -Path HKCU:\Software\Microsoft\DirectX\UserGpuPreferences -Name $app -PropertyType String -Value "GpuPreference=2;" -Force
-		}
-	}
 	do
 	{
-		$apps = Read-Host -Prompt " "
-		if ($apps -match ".exe" -and $apps -match "`"")
+		if ($RU)
 		{
-			GpuPreference $apps
+			Write-Host "`nЧтобы добавить приложение, для которого будет установлена настройка производительности графики"
+			Write-Host "на `"Высокая производительность`", введите букву: "
+			Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+			Write-Host " или " -NoNewline
+			Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+			Write-Host ", чтобы пропустить" -NoNewline
+			Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
 		}
-		elseif ([string]::IsNullOrEmpty($apps))
+		else
+		{
+			Write-Host "`nTo add an app for which the graphics performance preference"
+			Write-Host "will be set to `"High performance`" type: "
+			Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+			Write-Host " or " -NoNewline
+			Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+			Write-Host " to skip" -NoNewline
+			Write-Host "`nAlso press Enter to skip" -NoNewline
+		}
+		$Prompt = Read-Host -Prompt " "
+		if ([string]::IsNullOrEmpty($Prompt))
 		{
 			break
 		}
 		else
 		{
-			if ($RU)
+			switch ($Prompt)
 			{
-				Write-Host "`nПути не взяты в кавычки или не содержат ссылки на .exe файлы." -ForegroundColor Yellow
-				Write-Host "Введите полные пути до .exe файлов, взяв в кавычки и разделив запятыми."
-				Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-			}
-			else
-			{
-				Write-Host "`nThe paths hasn't been taken in quotes or do not contain links to .exe files" -ForegroundColor Yellow
-				Write-Host "Type the full paths to .exe files by quoting and separating by commas."
-				Write-Host "`nPress Enter to skip" -NoNewline
+				"Y"
+				{
+					if (-not (Test-Path -Path HKCU:\Software\Microsoft\DirectX\UserGpuPreferences))
+					{
+						New-Item -Path HKCU:\Software\Microsoft\DirectX\UserGpuPreferences -Force
+					}
+					Add-Type -AssemblyName System.Windows.Forms
+					$OpenFileDialog = New-Object -TypeName System.Windows.Forms.OpenFileDialog
+					if ($RU)
+					{
+						$OpenFileDialog.Filter = "*.exe|*.exe|Все файлы (*.*)|*.*"
+					}
+					else
+					{
+						$OpenFileDialog.Filter = "*.exe|*.exe|All Files (*.*)|*.*"
+					}
+					$OpenFileDialog.InitialDirectory = "$env:ProgramFiles}"
+					$OpenFileDialog.Multiselect = $false
+					# Focus on open file dialog
+					# Перевести фокус на диалог открытия файла
+					$tmp = New-Object -TypeName System.Windows.Forms.Form -Property @{TopMost = $true}
+					$OpenFileDialog.ShowDialog($tmp)
+					if ($OpenFileDialog.FileName)
+					{
+						New-ItemProperty -Path HKCU:\Software\Microsoft\DirectX\UserGpuPreferences -Name $OpenFileDialog.FileName -PropertyType String -Value "GpuPreference=2;" -Force
+					}
+				}
+				"N" {}
+				Default
+				{
+					if ($RU)
+					{
+						Write-Host "`nНеправильная буква." -ForegroundColor Yellow
+						Write-Host "`nЧтобы добавить приложение, для которого будет установлена настройка производительности графики"
+						Write-Host "на `"Высокая производительность`", введите букву: "
+						Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+						Write-Host " или " -NoNewline
+						Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+						Write-Host ", чтобы пропустить" -NoNewline
+						Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
+					}
+					else
+					{
+						Write-Host "`nInvalid letter." -ForegroundColor Yellow
+						Write-Host "`nTo add an app for which the graphics performance preference"
+						Write-Host "will be set to `"High performance`" type: "
+						Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+						Write-Host " or " -NoNewline
+						Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+						Write-Host " to skip" -NoNewline
+						Write-Host "`nAlso press Enter to skip" -NoNewline
+					}
+				}
 			}
 		}
 	}
-	until ($apps -match ".exe" -and $apps -match "`"")
+	while ($Prompt -ne "N")
 }
 # Launch folder in a separate process
 # Запускать окна с папками в отдельном процессе
@@ -1349,11 +1557,11 @@ New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\
 # Отключить и удалить зарезервированное хранилище после следующей установки обновлений
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager -Name PassedPolicy -PropertyType DWord -Value 0 -Force
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager -Name ShippedWithReserves -PropertyType DWord -Value 0 -Force
-# Turn on automatic backup the system registry to the $env:SystemRoot\System32\config\RegBack folder
-# Включить автоматическое создание копии реестра в папку $env:SystemRoot\System32\config\RegBack
+# Turn on automatic backup the system registry to the %SystemRoot%\System32\config\RegBack folder
+# Включить автоматическое создание копии реестра в папку %SystemRoot%\System32\config\RegBack
 New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Configuration Manager" -Name EnablePeriodicBackup -PropertyType DWord -Value 1 -Force
-# Turn off F1 Help key
-# Отключить справку по нажатию F1
+# Turn off Help page opening by F1 key
+# Отключить открытие справки по нажатию F1
 if (-not (Test-Path -Path "HKCU:\Software\Classes\Typelib\{8cec5860-07a1-11d9-b15e-000d56bfe6ee}\1.0\0\win64"))
 {
 	New-Item -Path "HKCU:\Software\Classes\Typelib\{8cec5860-07a1-11d9-b15e-000d56bfe6ee}\1.0\0\win64" -Force
@@ -1372,8 +1580,8 @@ New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\
 # Отключить удаление кэша миниатюр
 New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches\Thumbnail Cache" -Name Autorun -PropertyType DWord -Value 0 -Force
 New-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches\Thumbnail Cache" -Name Autorun -PropertyType DWord -Value 0 -Force
-# Turn on network discovery and file and printers sharing
-# Включить сетевое обнаружение и общий доступ к файлам и принтерам
+# Turn on network discovery and file and printers sharing if device is not domain-joined
+# Включить сетевое обнаружение и общий доступ к файлам и принтерам, если устройство не присоединенно к домену
 if ((Get-NetConnectionProfile).NetworkCategory -ne "DomainAuthenticated")
 {
 	Get-NetFirewallRule -Group "@FirewallAPI.dll,-32752", "@FirewallAPI.dll,-28502" | Set-NetFirewallRule -Profile Private -Enabled True
@@ -1382,33 +1590,37 @@ if ((Get-NetConnectionProfile).NetworkCategory -ne "DomainAuthenticated")
 #endregion System
 
 #region Start menu
-# Do not show recently added apps on Start menu
+# Do not show recently added apps in Start menu
 # Не показывать недавно добавленные приложения в меню "Пуск"
 if (-not (Test-Path -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer))
 {
 	New-Item -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer -Force
 }
 New-ItemProperty -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer -Name HideRecentlyAddedApps -PropertyType DWord -Value 1 -Force
-# Open shortcut to the Command Prompt from Start menu as Administrator
-# Запускать ярлык к командной строке в меню "Пуск" от имени Администратора
+# Do not show app suggestions in Start menu
+# Не показывать рекомендации в меню "Пуск"
+New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SubscribedContent-338388Enabled -PropertyType DWord -Value 0 -Force
+# Run the Command Prompt shortcut from the Start menu as Administrator
+# Запускать ярлык командной строки в меню "Пуск" от имени Администратора
 [byte[]]$bytes = Get-Content -Path "$env:APPDATA\Microsoft\Windows\Start menu\Programs\System Tools\Command Prompt.lnk" -Encoding Byte -Raw
 $bytes[0x15] = $bytes[0x15] -bor 0x20
 Set-Content -Path "$env:APPDATA\Microsoft\Windows\Start menu\Programs\System Tools\Command Prompt.lnk" -Value $bytes -Encoding Byte -Force
-# Show "Explorer" and "Settings" folders on Start menu
+# Show the "File Explorer" and "Settings" folders on Start
 # Отобразить папки "Проводник" и "Параметры" в меню "Пуск"
-$items = @("File Explorer", "Settings")
-$startmenu = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\Cache\DefaultAccount\*windows.data.unifiedtile.startglobalproperties\Current"
-$data = $startmenu.Data[0..19] -join ","
-$data += ",203,50,10,$($items.Length)"
-# Explorer
+# https://github.com/Disassembler0/Win10-Initial-Setup-Script/issues/199
+$Folders = @("File Explorer", "Settings")
+$StartMenu = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\Cache\DefaultAccount\*windows.data.unifiedtile.startglobalproperties\Current"
+$Data = $StartMenu.Data[0..19] -join ","
+$Data += ",203,50,10,$($Folders.Length)"
+# File Explorer
 # Проводник
-$data += ",5,188,201,168,164,1,36,140,172,3,68,137,133,1,102,160,129,186,203,189,215,168,164,130,1,0"
+$Data += ",5,188,201,168,164,1,36,140,172,3,68,137,133,1,102,160,129,186,203,189,215,168,164,130,1,0"
 # Settings
 # Параметры
-$data += ",5,134,145,204,147,5,36,170,163,1,68,195,132,1,102,159,247,157,177,135,203,209,172,212,1,0"
-$data += ",194,60,1,194,70,1,197,90,1,0"
-New-ItemProperty -Path $startmenu.PSPath -Name Data -PropertyType Binary -Value $data.Split(",") -Force
-# Unpin all Start menu tiles
+$Data += ",5,134,145,204,147,5,36,170,163,1,68,195,132,1,102,159,247,157,177,135,203,209,172,212,1,0"
+$Data += ",194,60,1,194,70,1,197,90,1,0"
+New-ItemProperty -Path $StartMenu.PSPath -Name Data -PropertyType Binary -Value $Data.Split(",") -Force
+# Unpin all the Start menu tiles
 # Открепить все ярлыки от начального экрана
 if ($RU)
 {
@@ -1418,7 +1630,7 @@ if ($RU)
 }
 else
 {
-	Write-Host "`nTo unpin all Start menu tiles type: " -NoNewline
+	Write-Host "`nTo unpin all the Start menu tiles type: " -NoNewline
 	Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
 	Write-Host "`nPress Enter to skip" -NoNewline
 }
@@ -1444,17 +1656,15 @@ do
 				if ($RU)
 				{
 					Write-Host "`nНеправильная буква." -ForegroundColor Yellow
-					Write-Host "Введите правильную букву: " -NoNewline
+					Write-Host "`nЧтобы открепить все ярлыки от начального экрана, введите букву: " -NoNewline
 					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
-					Write-Host ", чтобы открепить все ярлыки от начального экрана" -NoNewline
 					Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
 				}
 				else
 				{
 					Write-Host "`nInvalid letter." -ForegroundColor Yellow
-					Write-Host "Type the correct letter: " -NoNewline
+					Write-Host "`nTo unpin all the Start menu tiles type: " -NoNewline
 					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
-					Write-Host " to unpin all Start menu tiles" -NoNewline
 					Write-Host "`nPress Enter to skip" -NoNewline
 				}
 			}
@@ -1462,26 +1672,42 @@ do
 	}
 }
 until ($Unpin -eq "Y")
+# Restart Start menu
+# Перезапустить меню "Пуск"
+Stop-Process -Name StartMenuExperienceHost -Force
+
+# Pin the shortcuts to Start
+# Закрепить ярлыки на начальном экране
 # Download syspin.exe to the "Downloads" folder
 # Скачать syspin.exe в папку "Загрузки"
 # http://www.technosys.net/products/utils/pintotaskbar
-# Hash (SHA256): 6967E7A3C2251812DD6B3FA0265FB7B61AADC568F562A98C50C345908C6E827
-$OutFile = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "{374DE290-123F-4565-9164-39C4925E467B}"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$HT = @{
-	Uri = "https://github.com/farag2/Windows-10-Setup-Script/raw/master/Start%20menu%20layout/syspin.exe"
-	OutFile = "$OutFile\syspin.exe"
-	Verbose = [switch]::Present
+# SHA256: 6967E7A3C2251812DD6B3FA0265FB7B61AADC568F562A98C50C345908C6E827
+if (Test-Connection -ComputerName google.com -Quiet)
+{
+	$DownloadsFolder = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "{374DE290-123F-4565-9164-39C4925E467B}"
+	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+	$param = @{
+		Uri = "https://github.com/farag2/Windows-10-Setup-Script/raw/master/Start%20menu%20pinning/syspin.exe"
+		OutFile = "$DownloadsFolder\syspin.exe"
+		Verbose = [switch]::Present
+	}
+	Invoke-WebRequest @param
 }
-Invoke-WebRequest @HT
-# Закрепить на начальном экране ярлыки
-# Pin to Start the shortcuts
+else
+{
+	if ($RU)
+	{
+		Write-Warning "Отсутствует интернет-соединение" -ErrorAction SilentlyContinue
+	}
+	else
+	{
+		Write-Warning "No Internet connection" -ErrorAction SilentlyContinue
+	}
+}
 Add-Type -AssemblyName System.Windows.Forms
 $OpenFileDialog = New-Object -TypeName System.Windows.Forms.OpenFileDialog
-# Initial directory "Downloads"
-# Начальная папка "Загрузки"
-$DownloadsFolder = Get-ItemPropertyValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name "{374DE290-123F-4565-9164-39C4925E467B}"
 $OpenFileDialog.InitialDirectory = $DownloadsFolder
+$OpenFileDialog.Multiselect = $false
 if ($RU)
 {
 	$OpenFileDialog.Filter = "*.exe|*.exe|Все файлы (*.*)|*.*"
@@ -1492,77 +1718,90 @@ else
 }
 # Focus on open file dialog
 # Перевести фокус на диалог открытия файла
-$tmp = New-Object -TypeName System.Windows.Forms.Form
-$tmp.add_Shown(
-{
-	$tmp.Visible = $false
-	$tmp.Activate()
-	$tmp.TopMost = $true
-	$OpenFileDialog.ShowDialog($tmp)
-	$tmp.Close()
-})
-$tmp.ShowDialog()
+$tmp = New-Object -TypeName System.Windows.Forms.Form -Property @{TopMost = $true}
+$OpenFileDialog.ShowDialog($tmp)
 if ($OpenFileDialog.FileName)
 {
-	# Add old style shortcut for "Devices and Printers" to the Start menu
-	# Добавить ярлык старого формата для "Устройства и принтеры" в меню Пуск
+	# Pin "Control Panel" to Start
+	# Закрепить "Панель управления" на начальном экране
 	$Items = (New-Object -ComObject Shell.Application).NameSpace("shell:::{4234d49b-0245-4df3-b780-3893943456e1}").Items()
 	$ControlPanelLocalizedName = ($Items | Where-Object -FilterScript {$_.Path -eq "Microsoft.Windows.ControlPanel"}).Name
-	# If Control Panel shortcut was ever pinned
-	# Если ярлык панели управления когда-либо закреплялся
-	if (Test-Path -Path "$env:APPDATA\Microsoft\Windows\Start menu\Programs\$ControlPanelLocalizedName.lnk")
+	if ($RU)
 	{
-		$Args = @"
-			"$env:APPDATA\Microsoft\Windows\Start menu\Programs\$ControlPanelLocalizedName.lnk" "51201"
-"@
-		Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Args -Wait
+		Write-Verbose -Message "Ярлык `"$ControlPanelLocalizedName`" закрепляется на начальном экране" -Verbose
 	}
 	else
 	{
+		Write-Verbose -Message "`"$ControlPanelLocalizedName`" shortcut is being pinned to Start" -Verbose
+	}
+	# Check whether the Control Panel shortcut was ever pinned
+	# Проверка: закреплялся ли когда-нибудь ярлык панели управления
+	if (Test-Path -Path "$env:APPDATA\Microsoft\Windows\Start menu\Programs\$ControlPanelLocalizedName.lnk")
+	{
+		$Arguments = @"
+			"$env:APPDATA\Microsoft\Windows\Start menu\Programs\$ControlPanelLocalizedName.lnk" "51201"
+"@
+		Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Arguments -Wait
+	}
+	else
+	{
+		# The "Pin" verb is not available on the control.exe file so the shortcut has to be created
+		# Глагол "Закрепить на начальном экране" недоступен для control.exe, поэтому необходимо создать ярлык
 		$shell = New-Object -ComObject Wscript.Shell
-		# Place the shortcut in "$env:SystemRoot\System32\$linkname.lnk"
-		# Разместим ярлык в "$env:SystemRoot\System32\$linkname.lnk"
 		$shortcut = $shell.CreateShortcut("$env:SystemRoot\System32\$ControlPanelLocalizedName.lnk")
 		$shortcut.TargetPath = "$env:SystemRoot\System32\control.exe"
 		$shortcut.Save()
-		# Pin to Start Control Panel
-		# The "Pin" verb is not available on the control.exe file so the shortcut has to be created
-		# Закрепить на начальном "Панель управления"
-		# Глагол "Закрепить на начальном экране" недоступен для control.exe, поэтому необходимо создать ярлык
-		$Args = @"
+		$Arguments = @"
 			"$env:SystemRoot\System32\$ControlPanelLocalizedName.lnk" "51201"
 "@
-		Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Args -Wait
+		Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Arguments -Wait
 		Remove-Item -Path "$env:SystemRoot\System32\$ControlPanelLocalizedName.lnk" -Force
 	}
-	# Add old style shortcut for "Devices and Printers" to the Start menu
-	# Добавить ярлык старого формата для "Устройства и принтеры" в меню Пуск
+	# Pin "Devices and Printers" to Start
+	# Create old style shortcut for the "Devices and Printers" in the Start menu
+	# Закрепить "Устройства и принтеры" на начальном экране
+	# Создать ярлык старого формата для "Устройства и принтеры" в меню "Пуск"
 	$DevicesAndPrintersLocalizedName = (Get-ControlPanelItem | Where-Object -FilterScript {$_.CanonicalName -eq "Microsoft.DevicesAndPrinters"}).Name
+	if ($RU)
+	{
+		Write-Verbose -Message "Ярлык `"$DevicesAndPrintersLocalizedName`" закрепляется на начальном экране" -Verbose
+	}
+	else
+	{
+		Write-Verbose -Message "`"$DevicesAndPrintersLocalizedName`" shortcut is being pinned to Start" -Verbose
+	}
 	$shell = New-Object -ComObject Wscript.Shell
 	$shortcut = $shell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start menu\Programs\System Tools\$DevicesAndPrintersLocalizedName.lnk")
 	$shortcut.TargetPath = "control"
 	$shortcut.Arguments = "printers"
 	$shortCut.IconLocation = "$env:SystemRoot\system32\DeviceCenter.dll"
 	$shortcut.Save()
-	# Pin to Start Devices and Printers
-	# Закрепить на начальном "Устройства и принтеры"
-	$Args = @"
+	# Pause for 3 sec, unless the "Devices and Printers" shortcut won't displayed in the Start menu
+	# Пауза на 3 с, иначе ярлык "Устройства и принтеры" не будет отображаться в меню "Пуск"
+	Start-Sleep -Seconds 3
+	$Arguments = @"
 		"$env:APPDATA\Microsoft\Windows\Start menu\Programs\System Tools\$DevicesAndPrintersLocalizedName.lnk" "51201"
 "@
-	Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Args -Wait
-	# Pin to Start Command Prompt
-	# Закрепить на начальном "Командная строка"
-	$Args = @"
+	Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Arguments -Wait
+	# Pin "Command Prompt" to Start
+	# Закрепить "Командную строку" на начальном экране
+	if ($RU)
+	{
+		Write-Verbose -Message "Ярлык `"Командная строка`" закрепляется на начальном экране" -Verbose
+	}
+	else
+	{
+		Write-Verbose -Message "`"Command Prompt`" shortcut is being pinned to Start" -Verbose
+	}
+	$Arguments = @"
 		"$env:APPDATA\Microsoft\Windows\Start menu\Programs\System Tools\Command Prompt.lnk" "51201"
 "@
-	Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Args -Wait
+	Start-Process -FilePath $OpenFileDialog.FileName -WindowStyle Hidden -ArgumentList $Arguments -Wait
 }
-Remove-Item -Path "$OutFile\syspin.exe" -Force -ErrorAction Ignore
-
-# Do not show app suggestions on Start menu
-# Не показывать рекомендации в меню "Пуск"
-New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager -Name SubscribedContent-338388Enabled -PropertyType DWord -Value 0 -Force
-# Restart Start menu
+# Delete downloaded syspin.exe
+# Удалить скачанный syspin.exe
+Remove-Item -Path "$DownloadsFolder\syspin.exe" -Force
+# Restart the Start menu
 # Перезапустить меню "Пуск"
 Stop-Process -Name StartMenuExperienceHost -Force
 #endregion Start menu
@@ -1589,11 +1828,18 @@ New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer 
 
 #region UWP apps
 # Uninstall all UWP apps from all accounts, except the followings...
+# App packages will not be installed when new user accounts are created
+# Retrieve UWP apps package names by (Get-AppxPackage -PackageTypeFilter Bundle -AllUsers).Name command
 # Удалить все UWP-приложения из всех учетных записей, кроме следующих...
-$ExcludedApps = @(
+# Приложения не будут установлены при создании новых учетных записей
+# Получите имена пакетов UWP-приложений с помощью команды (Get-AppxPackage -PackageTypeFilter Bundle -AllUsers).Name
+$ExcludedAppxPackages = @(
+	# AMD Radeon UWP panel
+	# UWP-панель AMD Radeon
+	"AdvancedMicroDevicesInc*"
 	# iTunes
 	"AppleInc.iTunes"
-	# Intel UWP-panel
+	# Intel UWP panel
 	# UWP-панель Intel
 	"AppUp.IntelGraphicsControlPanel"
 	"AppUp.IntelGraphicsExperience"
@@ -1617,58 +1863,42 @@ $ExcludedApps = @(
 	# Calculator
 	# Калькулятор
 	"Microsoft.WindowsCalculator"
+	# Xbox Identity Provider
+	# Поставщик удостоверений Xbox
+	"Microsoft.XboxIdentityProvider"
+	# Xbox
+	# Компаньон консоли Xbox
+	"Microsoft.XboxApp"
+	# Xbox TCUI
+	"Microsoft.Xbox.TCUI"
+	# Xbox Speech To Text Overlay
+	"Microsoft.XboxSpeechToTextOverlay"
+	# Xbox Game Bar
+	"Microsoft.XboxGamingOverlay"
+	# Xbox Game Bar Plugin
+	"Microsoft.XboxGameOverlay"
 	# NVIDIA Control Panel
 	# Панель управления NVidia
 	"NVIDIACorp.NVIDIAControlPanel"
+	# Realtek Audio Console
+	"RealtekSemiconductorCorp.RealtekAudioControl"
 )
 $OFS = "|"
-Get-AppxPackage -PackageTypeFilter Bundle -AllUsers | Where-Object {$_.Name -cnotmatch $ExcludedApps} | Remove-AppxPackage -AllUsers
+Get-AppxPackage -PackageTypeFilter Bundle -AllUsers | Where-Object -FilterScript {$_.Name -cnotmatch $ExcludedAppxPackages} | Remove-AppxPackage -AllUsers -Verbose
 $OFS = " "
-# Uninstall all provisioned UWP apps from System account, except the followings...
-# App packages will not be installed when new user accounts are created
-# Удалить все UWP-приложения из системной учетной записи, кроме следующих...
-# Приложения не будут установлены при создании новых учетных записей
-$ExcludedApps = @(
-	# Intel UWP-panel
-	# UWP-панель Intel
-	"AppUp.IntelGraphicsControlPanel"
-	"AppUp.IntelGraphicsExperience"
-	# Microsoft Desktop App Installer
-	"Microsoft.DesktopAppInstaller"
-	# HEIF Image Extensions
-	# Расширения для изображений HEIF
-	"Microsoft.HEIFImageExtension"
-	# Sticky Notes
-	# Записки
-	"Microsoft.MicrosoftStickyNotes"
-	# Screen Sketch
-	# Набросок на фрагменте экрана
-	"Microsoft.ScreenSketch"
-	# Microsoft Store
-	"Microsoft.StorePurchaseApp"
-	"Microsoft.WindowsStore"
-	# VP9 Video Extensions
-	# Расширения для VP9-видео
-	"Microsoft.VP9VideoExtensions"
-	# Web Media Extensions
-	# Расширения для интернет-мультимедиа
-	"Microsoft.WebMediaExtensions"
-	# WebP Image Extension
-	# Расширения для изображений WebP
-	"Microsoft.WebpImageExtension"
-	# Photos and Video Editor
-	# Фотографии и Видеоредактор
-	"Microsoft.Windows.Photos"
-	# Calculator
-	# Калькулятор
-	"Microsoft.WindowsCalculator"
-	# NVIDIA Control Panel
-	# Панель управления NVidia
-	"NVIDIACorp.NVIDIAControlPanel"
-)
-$OFS = "|"
-Get-AppxProvisionedPackage -Online | Where-Object -FilterScript {$_.DisplayName -cnotmatch $ExcludedApps} | Remove-AppxProvisionedPackage -Online
-$OFS = " "
+# Open Microsoft Store "HEVC Video Extensions from Device Manufacturer" page
+# The extension can be installed without Microsoft account
+# "Movies & TV" app required
+# Открыть страницу "Расширения для видео HEVC от производителя устройства" в Microsoft Store
+# Расширение может быть установлено без учетной записи Microsoft
+# Для работы необходимо приложение "Кино и ТВ"
+if (Get-AppxPackage -Name Microsoft.ZuneVideo)
+{
+	Start-Process -FilePath ms-windows-store://pdp/?ProductId=9n4wgh0z6vhq
+}
+# Check for UWP apps updates
+# Проверить обновления UWP-приложений
+Get-CimInstance -Namespace "Root\cimv2\mdm\dmmap" -ClassName "MDM_EnterpriseModernAppManagement_AppManagement01" | Invoke-CimMethod -MethodName UpdateScanMethod
 #endregion UWP apps
 
 #region Gaming
@@ -1679,6 +1909,29 @@ New-ItemProperty -Path HKCU:\System\GameConfigStore -Name GameDVR_Enabled -Prope
 # Turn off Xbox Game Bar tips
 # Отключить советы Xbox Game Bar
 New-ItemProperty -Path HKCU:\Software\Microsoft\GameBar -Name ShowStartupPanel -PropertyType DWord -Value 0 -Force
+# Uninstall all Xbox related UWP apps from all accounts
+# App packages will not be installed when new user accounts are created
+# Удалить все UWP-приложения, связанные с Xbox, из всех учетных записей
+# Приложения не будут установлены при создании новых учетных записей
+$XboxAppxPackages = @(
+	# Xbox Identity Provider
+	# Поставщик удостоверений Xbox
+	"Microsoft.XboxIdentityProvider"
+	# Xbox
+	# Компаньон консоли Xbox
+	"Microsoft.XboxApp"
+	# Xbox TCUI
+	"Microsoft.Xbox.TCUI"
+	# Xbox Speech To Text Overlay
+	"Microsoft.XboxSpeechToTextOverlay"
+	# Xbox Game Bar
+	"Microsoft.XboxGamingOverlay"
+	# Xbox Game Bar Plugin
+	"Microsoft.XboxGameOverlay"
+)
+$OFS = "|"
+Get-AppxPackage -PackageTypeFilter Bundle -AllUsers | Where-Object -FilterScript {$_.Name -cmatch $XboxAppxPackages} | Remove-AppxPackage -AllUsers -Verbose
+$OFS = " "
 #endregion Gaming
 
 #region Scheduled tasks
@@ -1725,9 +1978,9 @@ $params = @{
 	"Principal"	=	$principal
 }
 Register-ScheduledTask @params -Force
-# Create a task in the Task Scheduler to clear the $env:SystemRoot\SoftwareDistribution\Download folder
+# Create a task in the Task Scheduler to clear the %SystemRoot%\SoftwareDistribution\Download folder
 # The task runs on Thursdays every 4 weeks
-# Создать задачу в Планировщике задач по очистке папки $env:SystemRoot\SoftwareDistribution\Download
+# Создать задачу в Планировщике задач по очистке папки %SystemRoot%\SoftwareDistribution\Download
 # Задача выполняется по четвергам каждую 4 неделю
 $action = New-ScheduledTaskAction -Execute powershell.exe -Argument @"
 	`$getservice = Get-Service -Name wuauserv
@@ -1745,9 +1998,9 @@ $params = @{
 	"Principal"	=	$principal
 }
 Register-ScheduledTask @params -Force
-# Create a task in the Task Scheduler to clear the $env:TEMP folder
+# Create a task in the Task Scheduler to clear the %TEMP% folder
 # The task runs every 62 days
-# Создать задачу в Планировщике задач по очистке папки $env:TEMP
+# Создать задачу в Планировщике задач по очистке папки %TEMP%
 # Задача выполняется каждые 62 дня
 $action = New-ScheduledTaskAction -Execute powershell.exe -Argument @"
 	Get-ChildItem -Path `$env:TEMP -Force -Recurse | Remove-Item -Force -Recurse
@@ -1766,185 +2019,357 @@ Register-ScheduledTask @params -Force
 #endregion Scheduled tasks
 
 #region Windows Defender & Security
-# Add exclusion folder from Windows Defender Antivirus scanning
-# Добавить папку в список исключений сканирования Защитника Windows
-if ($RU)
-{
-	Write-Host "`nВведите полные пути до файлов или папок, которые следует "
-	Write-Host "исключить из списка сканирования Windows Defender."
-	Write-Host "Пути должны быть разделены запятыми и взяты в кавычки." -ForegroundColor Yellow
-	Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-}
-else
-{
-	Write-Host "`nType the full paths to files or folders, which to exclude "
-	Write-Host "from Windows Defender Antivirus Scan."
-	Write-Host "The paths must be separated by commas and taken in quotes." -ForegroundColor Yellow
-	Write-Host "`nPress Enter to skip" -NoNewline
-}
-function ExclusionPath
-{
-	[CmdletBinding()]
-	Param
-	(
-		[Parameter(Mandatory = $True)]
-		[string[]]$paths
-	)
-	$paths = $paths.Replace("`"", "").Split(",").Trim()
-	Add-MpPreference -ExclusionPath $paths -Force
-}
-do
-{
-	$paths = Read-Host -Prompt " "
-	if ($paths -match "`"")
-	{
-		ExclusionPath $paths
-	}
-	elseif ([string]::IsNullOrEmpty($paths))
-	{
-		break
-	}
-	else
-	{
-		if ($RU)
-		{
-			Write-Host "`nПути не взяты в кавычки." -ForegroundColor Yellow
-			Write-Host "Введите пути, взяв в кавычки и разделив запятыми."
-			Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-		}
-		else
-		{
-			Write-Host "`nThe paths hasn't been taken in quotes." -ForegroundColor Yellow
-			Write-Host "Type the paths by quoting and separating by commas."
-			Write-Host "`nPress Enter to skip" -NoNewline
-		}
-	}
-}
-until ($paths -match "`"")
 # Turn on Controlled folder access and add protected folders
 # Включить контролируемый доступ к папкам и добавить защищенные папки
-if ($RU)
-{
-	Write-Host "`nВведите путь до папки, чтобы добавить в список защищенных папок."
-	Write-Host "Пути должны быть разделены запятыми и взяты в кавычки." -ForegroundColor Yellow
-	Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-}
-else
-{
-	Write-Host "`nType folder path to add to protected folders list."
-	Write-Host "The paths must be separated by commas and taken in quotes." -ForegroundColor Yellow
-	Write-Host "`nPress Enter to skip" -NoNewline
-}
-function ControlledFolderAccess
-{
-	[CmdletBinding()]
-	Param
-	(
-		[Parameter(Mandatory = $True)]
-		[string[]]$paths
-	)
-	Set-MpPreference -EnableControlledFolderAccess Enabled
-	$paths = $paths.Replace("`"", "").Split(",").Trim()
-	Add-MpPreference -ControlledFolderAccessProtectedFolders $paths
-}
 do
 {
-	$paths = Read-Host -Prompt " "
-	if ($paths -match "`"")
+	if ($RU)
 	{
-		ControlledFolderAccess $paths
+		Write-Host "`nЧтобы включить контролируемый доступ к папкам"
+		Write-Host "и добавить папки в список защищенных, введите букву: "
+		Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+		Write-Host " или " -NoNewline
+		Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+		Write-Host ", чтобы пропустить" -NoNewline
+		Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
 	}
-	elseif ([string]::IsNullOrEmpty($paths))
+	else
+	{
+		Write-Host "`nTo turn on Controlled folder access and add protected folders type:"
+		Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+		Write-Host " or " -NoNewline
+		Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+		Write-Host " to skip" -NoNewline
+		Write-Host "`nAlso press Enter to skip" -NoNewline
+	}
+	$Prompt = Read-Host -Prompt " "
+	if ([string]::IsNullOrEmpty($Prompt))
 	{
 		break
 	}
 	else
 	{
-		if ($RU)
+		switch ($Prompt)
 		{
-			Write-Host "`nПути не взяты в кавычки." -ForegroundColor Yellow
-			Write-Host "Введите пути, взяв в кавычки и разделив запятыми."
-			Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-		}
-		else
-		{
-			Write-Host "`nThe paths hasn't been taken in quotes." -ForegroundColor Yellow
-			Write-Host "Type the paths by quoting and separating by commas."
-			Write-Host "`nPress Enter to skip" -NoNewline
+			"Y"
+			{
+				Add-Type -AssemblyName System.Windows.Forms
+				$OpenFileDialog = New-Object -TypeName System.Windows.Forms.FolderBrowserDialog
+				if ($RU)
+				{
+					$OpenFileDialog.Description = "Выберите папку"
+				}
+				else
+				{
+					$OpenFileDialog.Description = "Select a folder"
+				}
+				$OpenFileDialog.RootFolder = "MyComputer"
+				# Focus on open file dialog
+				# Перевести фокус на диалог открытия файла
+				$tmp = New-Object -TypeName System.Windows.Forms.Form -Property @{TopMost = $true}
+				$OpenFileDialog.ShowDialog($tmp)
+				if ($OpenFileDialog.SelectedPath)
+				{
+					Set-MpPreference -EnableControlledFolderAccess Enabled
+					Add-MpPreference -ControlledFolderAccessProtectedFolders $OpenFileDialog.SelectedPath -Force
+				}
+			}
+			"N" {}
+			Default
+			{
+				if ($RU)
+				{
+					Write-Host "`nНеправильная буква." -ForegroundColor Yellow
+					Write-Host "Чтобы включить контролируемый доступ к папкам"
+					Write-Host "и добавить папки в список защищенных, введите букву: "
+					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+					Write-Host " или " -NoNewline
+					Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+					Write-Host ", чтобы пропустить" -NoNewline
+					Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
+				}
+				else
+				{
+					Write-Host "`nInvalid letter." -ForegroundColor Yellow
+					Write-Host "To turn on Controlled folder access and add protected folders type:"
+					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+					Write-Host " or " -NoNewline
+					Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+					Write-Host " to skip" -NoNewline
+					Write-Host "`nAlso press Enter to skip" -NoNewline
+				}
+			}
 		}
 	}
 }
-until ($paths -match "`"")
+while ($Prompt -ne "N")
 # Allow an app through Controlled folder access
 # Разрешить работу приложения через контролируемый доступ к папкам
 if ((Get-MpPreference).EnableControlledFolderAccess -eq 1)
 {
-	if ($RU)
-	{
-		Write-Host "`nВведите путь до приложения, чтобы добавить в список разрешенных приложений."
-		Write-Host "Пути должны быть разделены запятыми и взяты в кавычки." -ForegroundColor Yellow
-		Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-	}
-	else
-	{
-		Write-Host "`nType app path to add to an allowed app list."
-		Write-Host "The paths must be separated by commas and taken in quotes." -ForegroundColor Yellow
-		Write-Host "`nPress Enter to skip" -NoNewline
-	}
-	function ControlledFolderAllowedApplications
-	{
-		[CmdletBinding()]
-		Param
-		(
-			[Parameter(Mandatory = $True)]
-			[string[]]$paths
-		)
-		$paths = $paths.Replace("`"", "").Split(",").Trim()
-		Add-MpPreference -ControlledFolderAccessAllowedApplications $paths
-	}
 	do
 	{
-		$paths = Read-Host -Prompt " "
-		if ($paths -match "`"")
+		if ($RU)
 		{
-			ControlledFolderAllowedApplications $paths
+			Write-Host "`nЧтобы разрешить работу приложения"
+			Write-Host "через контролируемый доступ к папкам, введите букву: "
+			Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+			Write-Host " или " -NoNewline
+			Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+			Write-Host ", чтобы пропустить" -NoNewline
+			Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
 		}
-		elseif ([string]::IsNullOrEmpty($paths))
+		else
+		{
+			Write-Host "`nTo allow an app through Controlled folder access type:"
+			Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+			Write-Host " or " -NoNewline
+			Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+			Write-Host " to skip" -NoNewline
+			Write-Host "`nAlso press Enter to skip" -NoNewline
+		}
+		$Prompt = Read-Host -Prompt " "
+		if ([string]::IsNullOrEmpty($Prompt))
 		{
 			break
 		}
 		else
 		{
-			if ($RU)
+			switch ($Prompt)
 			{
-				Write-Host "`nПути не взяты в кавычки." -ForegroundColor Yellow
-				Write-Host "Введите пути, взяв в кавычки и разделив запятыми."
-				Write-Host "`nЧтобы пропустить, нажмите Enter" -NoNewline
-			}
-			else
-			{
-				Write-Host "`nThe paths hasn't been taken in quotes." -ForegroundColor Yellow
-				Write-Host "Type the paths by quoting and separating by commas."
-				Write-Host "`nPress Enter to skip" -NoNewline
+				"Y"
+				{
+					Add-Type -AssemblyName System.Windows.Forms
+					$OpenFileDialog = New-Object -TypeName System.Windows.Forms.OpenFileDialog
+					if ($RU)
+					{
+						$OpenFileDialog.Filter = "*.exe|*.exe|Все файлы (*.*)|*.*"
+					}
+					else
+					{
+						$OpenFileDialog.Filter = "*.exe|*.exe|All Files (*.*)|*.*"
+					}
+					$OpenFileDialog.InitialDirectory = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+					$OpenFileDialog.Multiselect = $false
+					# Focus on open file dialog
+					# Перевести фокус на диалог открытия файла
+					$tmp = New-Object -TypeName System.Windows.Forms.Form -Property @{TopMost = $true}
+					$OpenFileDialog.ShowDialog($tmp)
+					if ($OpenFileDialog.FileName)
+					{
+						Add-MpPreference -ControlledFolderAccessAllowedApplications $OpenFileDialog.FileName -Force
+					}
+				}
+				"N" {}
+				Default
+				{
+					if ($RU)
+					{
+						Write-Host "`nНеправильная буква." -ForegroundColor Yellow
+						Write-Host "`nЧтобы разрешить работу приложения"
+						Write-Host "через контролируемый доступ к папкам, введите букву: "
+						Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+						Write-Host " или " -NoNewline
+						Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+						Write-Host ", чтобы пропустить" -NoNewline
+						Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
+					}
+					else
+					{
+						Write-Host "`nTo allow an app through Controlled folder access type:"
+						Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+						Write-Host " or " -NoNewline
+						Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+						Write-Host " to skip" -NoNewline
+						Write-Host "`nAlso press Enter to skip" -NoNewline
+					}
+				}
 			}
 		}
 	}
-	until ($paths -match "`"")
+	while ($Prompt -ne "N")
 }
+# Add exclusion folder from Windows Defender Antivirus scanning
+# Добавить папку в список исключений сканирования Windows Defender
+do
+{
+	if ($RU)
+	{
+		Write-Host "`nЧтобы исключить папку из списка сканирования"
+		Write-Host "антивредоносной программы Windows Defender, введите букву: "
+		Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+		Write-Host " или " -NoNewline
+		Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+		Write-Host ", чтобы пропустить" -NoNewline
+		Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
+	}
+	else
+	{
+		Write-Host "`nTo exclude folders from Windows Defender Antivirus Scan type: "
+		Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+		Write-Host " or " -NoNewline
+		Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+		Write-Host " to skip" -NoNewline
+		Write-Host "`nAlso press Enter to skip" -NoNewline
+	}
+	$Prompt = Read-Host -Prompt " "
+	if ([string]::IsNullOrEmpty($Prompt))
+	{
+		break
+	}
+	else
+	{
+		switch ($Prompt)
+		{
+			"Y"
+			{
+				Add-Type -AssemblyName System.Windows.Forms
+				$OpenFileDialog = New-Object -TypeName System.Windows.Forms.FolderBrowserDialog
+				if ($RU)
+				{
+					$OpenFileDialog.Description = "Выберите папку"
+				}
+				else
+				{
+					$OpenFileDialog.Description = "Select a folder"
+				}
+				$OpenFileDialog.RootFolder = "MyComputer"
+				# Focus on open file dialog
+				# Перевести фокус на диалог открытия файла
+				$tmp = New-Object -TypeName System.Windows.Forms.Form -Property @{TopMost = $true}
+				$OpenFileDialog.ShowDialog($tmp)
+				if ($OpenFileDialog.SelectedPath)
+				{
+					Add-MpPreference -ExclusionPath $OpenFileDialog.SelectedPath -Force
+				}
+			}
+			"N" {}
+			Default
+			{
+				if ($RU)
+				{
+					Write-Host "`nНеправильная буква." -ForegroundColor Yellow
+					Write-Host "`nЧтобы исключить папку из списка сканирования"
+					Write-Host "антивредоносной программы Windows Defender, введите букву: "
+					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+					Write-Host " или " -NoNewline
+					Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+					Write-Host ", чтобы пропустить" -NoNewline
+					Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
+				}
+				else
+				{
+					Write-Host "`nInvalid letter." -ForegroundColor Yellow
+					Write-Host "`nTo exclude folders from Windows Defender Antivirus Scan type: "
+					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+					Write-Host " or " -NoNewline
+					Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+					Write-Host " to skip" -NoNewline
+					Write-Host "`nAlso press Enter to skip" -NoNewline
+				}
+			}
+		}
+	}
+}
+while ($Prompt -ne "N")
+# Add exclusion file from Windows Defender Antivirus scanning
+# Добавить файл в список исключений сканирования Windows Defender
+do
+{
+	if ($RU)
+	{
+		Write-Host "`nЧтобы исключить файл из списка сканирования"
+		Write-Host "антивредоносной программы Windows Defender, введите букву: "
+		Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+		Write-Host " или " -NoNewline
+		Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+		Write-Host ", чтобы пропустить" -NoNewline
+		Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
+	}
+	else
+	{
+		Write-Host "`nTo exclude file from Windows Defender Antivirus Scan type: "
+		Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+		Write-Host " or " -NoNewline
+		Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+		Write-Host " to skip" -NoNewline
+		Write-Host "`nAlso press Enter to skip" -NoNewline
+	}
+	$Prompt = Read-Host -Prompt " "
+	if ([string]::IsNullOrEmpty($Prompt))
+	{
+		break
+	}
+	else
+	{
+		switch ($Prompt)
+		{
+			"Y"
+			{
+				Add-Type -AssemblyName System.Windows.Forms
+				$OpenFileDialog = New-Object -TypeName System.Windows.Forms.OpenFileDialog
+				if ($RU)
+				{
+					$OpenFileDialog.Filter = "*.exe|*.exe|Все файлы (*.*)|*.*"
+				}
+				else
+				{
+					$OpenFileDialog.Filter = "*.exe|*.exe|All Files (*.*)|*.*"
+				}
+				$OpenFileDialog.InitialDirectory = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+				$OpenFileDialog.Multiselect = $false
+				# Focus on open file dialog
+				# Перевести фокус на диалог открытия файла
+				$tmp = New-Object -TypeName System.Windows.Forms.Form -Property @{TopMost = $true}
+				$OpenFileDialog.ShowDialog($tmp)
+				if ($OpenFileDialog.FileName)
+				{
+					Add-MpPreference -ExclusionPath $OpenFileDialog.FileName -Force
+				}
+			}
+			"N" {}
+			Default
+			{
+				if ($RU)
+				{
+					Write-Host "`nНеправильная буква." -ForegroundColor Yellow
+					Write-Host "`nЧтобы исключить файл из списка сканирования"
+					Write-Host "антивредоносной программы Windows Defender, введите букву: "
+					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+					Write-Host " или " -NoNewline
+					Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+					Write-Host ", чтобы пропустить" -NoNewline
+					Write-Host "`nТакже, чтобы пропустить, нажмите Enter" -NoNewline
+				}
+				else
+				{
+					Write-Host "`nInvalid letter." -ForegroundColor Yellow
+					Write-Host "`nTo exclude file from Windows Defender Antivirus Scan type: "
+					Write-Host "[Y]es" -ForegroundColor Yellow -NoNewline
+					Write-Host " or " -NoNewline
+					Write-Host "[N]o" -ForegroundColor Yellow -NoNewline
+					Write-Host " to skip" -NoNewline
+					Write-Host "`nAlso press Enter to skip" -NoNewline
+				}
+			}
+		}
+	}
+}
+while ($Prompt -ne "N")
 # Turn on Windows Defender Exploit Guard network protection
-# Включить защиту сети в Защитнике Windows
+# Включить защиту сети в Windows Defender
 Set-MpPreference -EnableNetworkProtection Enabled
 # Turn on detection for potentially unwanted applications
 # Включить обнаружение потенциально нежелательных приложений
 Set-MpPreference -PUAProtection Enabled
-# Run Microsoft Defender within a sandbox
-# Запускать Microsoft Defender в песочнице
+# Run Windows Defender within a sandbox
+# Запускать Windows Defender в песочнице
 setx /M MP_FORCE_USE_SANDBOX 1
-# Dismiss Microsoft Defender offer in the Windows Security about signing in Microsoft account
-# Отклонить предложение Microsoft Defender в "Безопасность Windows" о входе в аккаунт Microsoft
+# Dismiss Windows Defender offer in the Windows Security about signing in Microsoft account
+# Отклонить предложение Windows Defender в "Безопасность Windows" о входе в аккаунт Microsoft
 New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows Security Health\State" -Name AccountProtection_MicrosoftAccount_Disconnected -PropertyType DWord -Value 1 -Force
-# Dismiss Microsoft Defender offer in the Windows Security about to turn on the SmartScreen filter for Microsoft Edge
-# Отклонить предложение Защитника Windows в "Безопасность Windows" включить фильтр SmartScreen для Microsoft Edge
+# Dismiss Windows Defender offer in the Windows Security about to turn on the SmartScreen filter for Microsoft Edge
+# Отклонить предложение Microsoft Defender в "Безопасность Windows" включить фильтр SmartScreen для Microsoft Edge
 New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows Security Health\State" -Name AppAndBrowser_EdgeSmartScreenOff -PropertyType DWord -Value 0 -Force
 # Turn on logging for all Windows PowerShell modules
 # Включить ведение журнала для всех модулей Windows PowerShell
@@ -1977,9 +2402,9 @@ New-ItemProperty -Path HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\
 # Turn off SmartScreen for apps and files
 # Отключить SmartScreen для приложений и файлов
 New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer -Name SmartScreenEnabled -PropertyType String -Value Off -Force
-# Turn off Microsoft Defender SmartScreen for Microsoft Edge
-# Отключить Microsoft Defender SmartScreen в Microsoft Edge
-$edge = (Get-AppxPackage -Name "Microsoft.MicrosoftEdge").PackageFamilyName
+# Turn off Windows Defender SmartScreen for Microsoft Edge
+# Отключить Windows Defender SmartScreen в Microsoft Edge
+$edge = (Get-AppxPackage -Name Microsoft.MicrosoftEdge).PackageFamilyName
 if (-not (Test-Path -Path "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Storage\$edge\MicrosoftEdge\PhishingFilter"))
 {
 	New-Item -Path "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Storage\$edge\MicrosoftEdge\PhishingFilter" -Force
@@ -1992,8 +2417,8 @@ New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings" -
 #endregion Windows Defender & Security
 
 #region Context menu
-# Add "Extract" to MSI file type context menu
-# Добавить пункт "Extract" для MSI в контекстное меню
+# Add "Extract" item to Windows Installer (.msi) context menu
+# Добавить пункт "Извлечь" в контекстное меню Windows Installer (.msi)
 if (-not (Test-Path -Path Registry::HKEY_CLASSES_ROOT\Msi.Package\shell\Extract\Command))
 {
 	New-Item -Path Registry::HKEY_CLASSES_ROOT\Msi.Package\shell\Extract\Command -Force
@@ -2002,14 +2427,14 @@ $Value = "{0}" -f 'msiexec.exe /a "%1" /qb TARGETDIR="%1 extracted"'
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\Msi.Package\shell\Extract\Command -Name "(default)" -PropertyType String -Value $Value -Force
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\Msi.Package\shell\Extract -Name MUIVerb -PropertyType String -Value "@shell32.dll,-31382" -Force
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\Msi.Package\shell\Extract -Name Icon -PropertyType String -Value "shell32.dll,-16817" -Force
-# Add "Run as different user" from context menu for .exe file type
-# Добавить "Запуск от имени другого пользователя" в контекстное меню для .exe файлов
+# Add "Run as different user" item to the .exe files types context menu
+# Добавить "Запуск от имени другого пользователя" в контекстное меню .exe файлов
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\exefile\shell\runasuser -Name "(default)" -PropertyType String -Value "@shell32.dll,-50944" -Force
 Remove-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\exefile\shell\runasuser -Name Extended -Force -ErrorAction Ignore
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\exefile\shell\runasuser -Name SuppressionPolicyEx -PropertyType String -Value "{F211AA05-D4DF-4370-A2A0-9F19C09756A7}" -Force
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\exefile\shell\runasuser\command -Name DelegateExecute -PropertyType String -Value "{ea72d00e-4960-42fa-ba92-7792a7944c1d}" -Force
-# Add "Install" to .cab archive type context menu
-# Добавить пункт "Установить" для .cab архивов в контекстное меню
+# Add the "Install" item to the .cab archives context menu
+# Добавить пункт "Установить" в контекстное меню .cab архивов
 if (-not (Test-Path -Path Registry::HKEY_CLASSES_ROOT\CABFolder\Shell\RunAs\Command))
 {
 	New-Item -Path Registry::HKEY_CLASSES_ROOT\CABFolder\Shell\RunAs\Command -Force
@@ -2018,31 +2443,31 @@ $Value = "{0}" -f 'cmd /c DISM /Online /Add-Package /PackagePath:"%1" /NoRestart
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\CABFolder\Shell\RunAs\Command -Name "(default)" -PropertyType String -Value $Value -Force
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\CABFolder\Shell\RunAs -Name MUIVerb -PropertyType String -Value "@shell32.dll,-10210" -Force
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\CABFolder\Shell\RunAs -Name HasLUAShield -PropertyType String -Value "" -Force
-# Remove "Cast to Device" from context menu
-# Удалить пункт "Передать на устройство" из контекстного меню
+# Hide "Cast to Device" item from the context menu
+# Скрыть пункт "Передать на устройство" из контекстного меню
 if (-not (Test-Path -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked"))
 {
 	New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked" -Force
 }
 New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked" -Name "{7AD84985-87B4-4a16-BE58-8B72A5B390F7}" -PropertyType String -Value "Play to menu" -Force
-# Remove "Share" from context menu
-# Удалить пункт "Отправить" (поделиться) из контекстного меню
+# Hide "Share" item from the context menu
+# Скрыть пункт "Отправить" (поделиться) из контекстного меню
 if (-not (Test-Path -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked"))
 {
 	New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked" -Force
 }
 New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked" -Name "{E2BF9676-5F8F-435C-97EB-11607A5BEDF7}" -PropertyType String -Value "" -Force
-# Remove "Edit with Paint 3D" from context menu
-# Удалить пункт "Изменить с помощью Paint 3D" из контекстного меню
-$exts = @(".bmp", ".gif", ".jpe", ".jpeg", ".jpg", ".png", ".tif", ".tiff")
-foreach ($ext in $exts)
+# Hide "Edit with Paint 3D" item from the context menu
+# Скрыть пункт "Изменить с помощью Paint 3D" из контекстного меню
+$extensions = @(".bmp", ".gif", ".jpe", ".jpeg", ".jpg", ".png", ".tif", ".tiff")
+foreach ($extension in $extensions)
 {
-	New-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\SystemFileAssociations\$ext\Shell\3D Edit" -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
+	New-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\SystemFileAssociations\$extension\Shell\3D Edit" -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
 }
-# Remove "Include in Library" from context menu
-# Удалить пункт "Добавить в библиотеку" из контекстного меню
+# Hide "Include in Library" item from the context menu
+# Скрыть пункт "Добавить в библиотеку" из контекстного меню
 New-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\Folder\shellex\ContextMenuHandlers\Library Location" -Name "(default)" -PropertyType String -Value "-{3dad6c5d-2167-4cae-9914-f99e41c12cfa}" -Force
-# Remove "Turn on BitLocker" from context menu
+# Remove "Turn on BitLocker" item from the context menu
 # Удалить пункт "Включить BitLocker" из контекстного меню
 if (Get-WindowsEdition -Online | Where-Object -FilterScript {$_.Edition -eq "Professional" -or $_.Edition -eq "Enterprise"})
 {
@@ -2053,49 +2478,52 @@ if (Get-WindowsEdition -Online | Where-Object -FilterScript {$_.Edition -eq "Pro
 	New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\Drive\shell\resume-bde-elev -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
 	New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\Drive\shell\unlock-bde -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
 }
-# Remove "Edit with Photos" from context menu
+# Remove "Edit with Photos" item from the context menu
 # Удалить пункт "Изменить с помощью приложения "Фотографии"" из контекстного меню
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\AppX43hnxtbyyps62jhe9sqpdzxn1790zetc\Shell\ShellEdit -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
-# Remove "Create a new video" from context menu
+# Remove "Create a new video" item from the context menu
 # Удалить пункт "Создать новое видео" из контекстного меню
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\AppX43hnxtbyyps62jhe9sqpdzxn1790zetc\Shell\ShellCreateVideo -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
-# Remove "Edit" from images context menu
-# Удалить пункт "Изменить" из контекстного меню изображений
+# Remove "Bitmap image" item from the "New" context menu
+# Удалить пункт "Точечный рисунок" из контекстного меню "Создать"
+Remove-Item -Path Registry::HKEY_CLASSES_ROOT\.bmp\ShellNew -Force -ErrorAction Ignore
+# Hide "Edit" item from the images context menu
+# Скрыть пункт "Изменить" из контекстного меню изображений
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\SystemFileAssociations\image\shell\edit -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
-# Remove "Print" from batch and .cmd files context menu
-# Удалить пункт "Печать" из контекстного меню для .bat и .cmd файлов
+# Remove "Print" item from the .bat and .cmd context menu
+# Удалить пункт "Печать" из контекстного меню .bat и .cmd файлов
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\batfile\shell\print -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\cmdfile\shell\print -Name ProgrammaticAccessOnly -PropertyType String -Value "" -Force
-# Remove "Compressed (zipped) Folder" from context menu
-# Удалить пункт "Сжатая ZIP-папка" из контекстного меню
+# Remove "Compressed (zipped) Folder" from the "New" context menu
+# Удалить пункт "Сжатая ZIP-папка" из контекстного меню "Создать"
 Remove-Item -Path Registry::HKEY_CLASSES_ROOT\.zip\CompressedFolder\ShellNew -Force -ErrorAction Ignore
-# Remove "Rich Text Document" from context menu
-# Удалить пункт "Создать Документ в формате RTF" из контекстного меню
+# Remove "Rich Text Document" from the "New" context menu
+# Удалить пункт "Документ в формате RTF" из контекстного меню "Создать"
 Remove-Item -Path Registry::HKEY_CLASSES_ROOT\.rtf\ShellNew -Force -ErrorAction Ignore
-# Remove "Bitmap image" from context menu
-# Удалить пункт "Создать Точечный рисунок" из контекстного меню
-Remove-Item -Path Registry::HKEY_CLASSES_ROOT\.bmp\ShellNew -Force -ErrorAction Ignore
-# Remove "Send to" from folder context menu
-# Удалить пункт "Отправить" из контекстного меню папки
+# Hide "Send to" item from the folders context menu
+# Скрыть пункт "Отправить" из контекстного меню папок
 New-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\AllFilesystemObjects\shellex\ContextMenuHandlers\SendTo -Name "(default)" -PropertyType String -Value "" -Force
-# Make the "Open", "Print", "Edit" context menu items available, when more than 15 selected
+# Make the "Open", "Print", "Edit" context menu items available, when more than 15 items selected
 # Сделать доступными элементы контекстного меню "Открыть", "Изменить" и "Печать" при выделении более 15 элементов
 New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer -Name MultipleInvokePromptMinimum -PropertyType DWord -Value 300 -Force
-# Turn off "Look for an app in the Microsoft Store" in "Open with" dialog
-# Отключить "Поиск приложения в Microsoft Store" в диалоге "Открыть с помощью"
+# Hide "Look for an app in the Microsoft Store" item in "Open with" dialog
+# Скрыть пункт "Поиск приложения в Microsoft Store" в диалоге "Открыть с помощью"
 if (-not (Test-Path -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer))
 {
 	New-Item -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer -Force
 }
 New-ItemProperty -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer -Name NoUseStoreOpenWith -PropertyType DWord -Value 1 -Force
+# Hide "Previous Versions" tab from files and folders context menu and "Restore previous versions" context menu item
+# Скрыть вкладку "Предыдущие версии" в свойствах файлов и папок и пункт контекстного меню "Восстановить прежнюю версию"
+New-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer -Name NoPreviousVersionsPage -PropertyType DWord -Value 1 -Force
 #endregion Context menu
 
 #region End
-# Refresh desktop icons, environment variables and taskbar without restarting File Explorer
-# Обновить иконки рабочего стола, переменные среды и панель задач без перезапуска "Проводника"
-$UpdateEnvExplorerAPI = @{
+# Refresh desktop icons, environment variables, taskbar and send F5 pressing simulation to refresh the desktop
+# Обновить иконки рабочего стола, переменные среды, панель задач и симулировать нажатие F5 для обновления рабочего стола
+$UpdateExplorer = @{
 	Namespace = "WinAPI"
-	Name = "UpdateEnvExplorer"
+	Name = "UpdateExplorer"
 	Language = "CSharp"
 	MemberDefinition = @"
 		private static readonly IntPtr HWND_BROADCAST = new IntPtr(0xffff);
@@ -2123,8 +2551,8 @@ $UpdateEnvExplorerAPI = @{
 
 		private static readonly IntPtr hWnd = new IntPtr(65535);
 		private const int Msg = 273;
-		// Virtual key ID of the F5 in Explorer
-		// Виртуальный код клавиши F5 в Проводнике
+		// Virtual key ID of the F5 in File Explorer
+		// Виртуальный код клавиши F5 в проводнике
 		private static readonly UIntPtr UIntPtr = new UIntPtr(41504);
 
 		[DllImport("user32.dll", SetLastError=true)]
@@ -2137,23 +2565,44 @@ $UpdateEnvExplorerAPI = @{
 		}
 "@
 }
-if (-not ("WinAPI.UpdateEnvExplorer" -as [type]))
+if (-not ("WinAPI.UpdateExplorer" -as [type]))
 {
-	Add-Type @UpdateEnvExplorerAPI
+	Add-Type @UpdateExplorer
 }
-[WinAPI.UpdateEnvExplorer]::Refresh()
-[WinAPI.UpdateEnvExplorer]::PostMessage()
+[WinAPI.UpdateExplorer]::Refresh()
+[WinAPI.UpdateExplorer]::PostMessage()
+# Restart the Start menu
+# Перезапустить меню "Пуск"
+Stop-Process -Name StartMenuExperienceHost -Force
 
 # Errors output
 # Вывод ошибок
 if ($Error)
 {
-	Write-Host "`nWarnings/Errors" -BackgroundColor Red
+	if ($RU)
+	{
+		Write-Host "`nПредупреждения/ошибки" -ForegroundColor Red
+	}
+	else
+	{
+		Write-Host "`nWarnings/errors" -ForegroundColor Red
+	}
 	($Error | ForEach-Object -Process {
 		[PSCustomObject] @{
 			Line = $_.InvocationInfo.ScriptLineNumber
-			Error = $_.Exception.Message
+			"Errors/Warnings" = $_.Exception.Message
 		}
 	} | Sort-Object -Property Line | Format-Table -AutoSize -Wrap | Out-String).Trim()
+}
+else
+{
+	if ($RU)
+	{
+		Write-Host "`nНет предупреждений/ошибок" -ForegroundColor Green
+	}
+	else
+	{
+		Write-Host "`nNo warnings/errors" -ForegroundColor Green
+	}
 }
 #endregion End
